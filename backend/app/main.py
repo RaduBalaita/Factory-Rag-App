@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_google_genai import GoogleGenerativeAI, HarmBlockThreshold, HarmCategory
 from langchain_community.document_loaders import PyMuPDFLoader
-from langchain.text_splitter import CharacterTextSplitter
+from langchain_core.documents import Document
+import re
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.retrievers.multi_query import MultiQueryRetriever
@@ -80,11 +81,38 @@ for machine, config in MACHINE_CONFIG.items():
         print(f"Creating new FAISS index for {machine}")
         loader = PyMuPDFLoader(config["doc"])
         documents = loader.load()
-        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        texts = text_splitter.split_documents(documents)
-        db = FAISS.from_documents(texts, embeddings)
-        db.save_local(config["index"])
-        config["db"] = db
+        # Custom splitting logic based on error codes
+        full_text = " ".join([doc.page_content for doc in documents])
+        
+        # Regex to find error codes and their descriptions
+        pattern = r"(\d{3,})\s*['‘]([^'’]+)['’]"
+        matches = list(re.finditer(pattern, full_text))
+        
+        texts = []
+        if matches:
+            for i in range(len(matches)):
+                start = matches[i].start()
+                end = matches[i+1].start() if i+1 < len(matches) else len(full_text)
+                
+                chunk_content = full_text[start:end]
+                
+                # Clean the chunk content
+                chunk_content = re.sub(r"·M· Model Ref\. \d+", "", chunk_content)
+                chunk_content = re.sub(r"Error solution", "", chunk_content)
+                chunk_content = re.sub(r"CNC \d+ ·M·", "", chunk_content)
+                chunk_content = chunk_content.replace("", "")
+                chunk_content = re.sub(r'\s+', ' ', chunk_content).strip()
+                
+                if chunk_content:
+                    texts.append(Document(page_content=chunk_content))
+
+        if texts:
+            db = FAISS.from_documents(texts, embeddings)
+            db.save_local(config["index"])
+            config["db"] = db
+        else:
+            print(f"WARNING: No text chunks were created for {machine}. The index will be empty.")
+            config["db"] = None
 
 @app.post("/query")
 async def ask_query(query: Query):
@@ -93,7 +121,10 @@ async def ask_query(query: Query):
         return {"error": "Machine not found"}
 
     # 1. Use the pre-loaded FAISS index
-    db = config["db"]
+    db = config.get("db")
+    if not db:
+        return {"response": f"The document index for '{query.machine}' is empty. This likely means the PDF could not be processed correctly. Please check the document format."}
+    
     retriever = db.as_retriever(search_kwargs={"k": 5})
 
     # 2. Use MultiQueryRetriever
@@ -108,6 +139,8 @@ async def ask_query(query: Query):
     1. **Problem Description:** Briefly explain what the error code means based on the context.
     2. **Probable Causes:** List the most likely reasons for this error from the context.
     3. **Solution Steps:** Provide a clear, step-by-step guide to fix the issue using only information from the context.
+
+    **IMPORTANT:** Only use information from the context that is explicitly and exactly about the provided error code. Ignore any information related to other error codes, even if they are numerically similar. If the context does not contain specific information for the queried error code, state that the information is not available.
 
     Context: {context}
 
@@ -126,10 +159,10 @@ async def ask_query(query: Query):
     )
 
     # 5. Invoke the chain with the user's query
-    response = await chain.ainvoke(f"error code {query.query}")
+    response = await chain.ainvoke(f"What is the meaning of error code {query.query}?")
 
     # 6. Debugging: Print the retrieved context
-    retrieved_docs = await mq_retriever.ainvoke(f"error code {query.query}")
+    retrieved_docs = await mq_retriever.ainvoke(f"What is the meaning of error code {query.query}?")
     print("Retrieved Context:", "\n".join([doc.page_content for doc in retrieved_docs]))
 
     return {"response": response}
