@@ -1,86 +1,132 @@
 .App {
-  text-align: center;
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
+  height: 100vh;
+  background-color: #f0f0f0;
 }
 
-form {
+.App.dark {
+    background-color: #333;
+    color: #fff;
+}
+
+.top-bar {
   display: flex;
-  flex-direction: column;
-  gap: 20px;
-  width: 80%;
-  max-width: 600px;
-  margin-bottom: 30px;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  width: 100%;
-}
-
-label {
-  margin-bottom: 5px;
-  font-size: 0.8em;
-}
-
-select,
-textarea {
-  width: 100%;
+  justify-content: space-between;
   padding: 10px;
-  border-radius: 5px;
-  border: none;
-  font-size: 0.9em;
+  background-color: #e0e0e0;
 }
 
-button {
-  padding: 12px 20px;
-  font-size: 1em;
-  color: white;
-  background-color: #61dafb;
+.App.dark .top-bar {
+    background-color: #222;
+}
+
+.top-bar button {
+  font-size: 24px;
+  background: none;
   border: none;
+  cursor: pointer;
+  color: #000;
+}
+
+.App.dark .top-bar button {
+    color: #fff;
+}
+
+.sidebar {
+  position: fixed;
+  top: 0;
+  height: 100%;
+  width: 250px;
+  background-color: #fff;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  transition: transform 0.3s ease-in-out;
+  z-index: 100;
+}
+
+.App.dark .sidebar {
+    background-color: #444;
+    color: #fff;
+}
+
+.machine-sidebar {
+  left: 0;
+  transform: translateX(-100%);
+}
+
+.settings-sidebar {
+  right: 0;
+  transform: translateX(100%);
+}
+
+.sidebar.open {
+  transform: translateX(0);
+}
+
+.chat-window {
+  flex-grow: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.input-bar {
+  display: flex;
+  padding: 10px;
+  background-color: #e0e0e0;
+}
+
+.App.dark .input-bar {
+    background-color: #222;
+}
+
+.input-bar input {
+  flex-grow: 1;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+}
+
+.App.dark .input-bar input {
+    background-color: #555;
+    color: #fff;
+    border-color: #666;
+}
+
+.input-bar button {
+  margin-left: 10px;
+  padding: 10px 20px;
+  border: none;
+  background-color: #007bff;
+  color: white;
   border-radius: 5px;
   cursor: pointer;
-  transition: background-color 0.3s ease;
 }
 
-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 200;
 }
 
-button:hover:not(:disabled) {
-  background-color: #4fa8c5;
+.modal {
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 5px;
+    width: 500px;
 }
 
-.response-container {
-  width: 80%;
-  max-width: 600px;
-  text-align: left;
-  background-color: #3a3f4a;
-  padding: 20px;
-  border-radius: 8px;
-  margin-top: 20px;
+.App.dark .modal {
+    background-color: #444;
 }
 
-.response-container h2 {
-  margin-top: 0;
-  font-size: 1.2em;
-  color: #61dafb;
-}
-
-.response-container p {
-  white-space: pre-wrap; /* This will respect newlines and spaces */
-  font-size: 0.9em;
-  line-height: 1.6;
+.modal textarea {
+    width: 100%;
+    margin-bottom: 10px;
 }

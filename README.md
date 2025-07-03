@@ -8,7 +8,24 @@ Its primary goal is to streamline the troubleshooting process, reduce downtime, 
 
 This project is a web-based application designed to assist factory employees by providing quick, AI-driven solutions to problems with machinery. It uses a Retrieval-Augmented Generation (RAG) model to pull information from specific machine documentation, ensuring the advice is accurate and relevant.
 
+## Features
+
+- **Chat-based Interface:** Interact with the assistant in a familiar chat window.
+- **Machine Selection:** Choose from a list of supported machines in a dedicated sidebar.
+- **Customizable Settings:**
+    - **Theme:** Switch between light and dark mode.
+    - **Language:** Change the application and model response language (English/Romanian).
+    - **System Prompt:** Modify the AI's system prompt to tailor its behavior.
+
 ## Project Status
+
+**Phase 2: UI Overhaul (In Progress)**
+
+- [X] Redesign the UI to a chat-based interface.
+- [X] Implement sidebars for machine selection and settings.
+- [X] Add theme, language, and system prompt customization.
+- [ ] Update backend to handle new settings.
+- [ ] Refine the chat experience and message display.
 
 **Phase 1: MVP (Complete)**
 
