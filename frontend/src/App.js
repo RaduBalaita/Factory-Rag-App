@@ -13,6 +13,7 @@ function App() {
     const [machine, setMachine] = useState('Yaskawa Alarm 380500');
     const [theme, setTheme] = useState('light');
     const [language, setLanguage] = useState('en');
+    const [fontSize, setFontSize] = useState(16);
     const [systemPrompt, setSystemPrompt] = useState('You are a helpful assistant.');
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -40,10 +41,15 @@ function App() {
         }
     };
 
+    const handleClearChat = () => {
+        setMessages([]);
+    };
+
     return (
-        <div className={`App ${theme}`}>
+        <div className={`App ${theme}`} style={{ fontSize: `${fontSize}px` }}>
             <div className="top-bar">
                 <button onClick={() => setMachineSidebarOpen(true)}>&#9776;</button>
+                <span className="machine-name">{machine}</span>
                 <button onClick={() => setSettingsSidebarOpen(true)}>&#9881;</button>
             </div>
             <MachineSidebar isOpen={isMachineSidebarOpen} onClose={() => setMachineSidebarOpen(false)} setMachine={setMachine} />
@@ -54,6 +60,8 @@ function App() {
                 setTheme={setTheme} 
                 language={language} 
                 setLanguage={setLanguage} 
+                fontSize={fontSize}
+                setFontSize={setFontSize}
                 openSystemPrompt={() => setSystemPromptModalOpen(true)} 
             />
             <SystemPromptModal 
@@ -63,7 +71,7 @@ function App() {
                 setSystemPrompt={setSystemPrompt} 
             />
             <ChatWindow messages={messages} />
-            <InputBar onSendMessage={handleSendMessage} />
+            <InputBar onSendMessage={handleSendMessage} onClearChat={handleClearChat} />
         </div>
     );
 }

@@ -42,10 +42,10 @@ MACHINE_CONFIG = {
         "doc": f"{DOCS_PATH}/PDF/1-1cvjgdf_ys840di_errorcode_of_alarm_380500-deu.pdf",
         "index": f"{FAISS_INDEX_PATH}/yaskawa_alarm_380500.faiss"
     },
-    "General Error Codes": {
-        "doc": f"{DOCS_PATH}/PDF/error-codes.pdf",
-        "index": f"{FAISS_INDEX_PATH}/general_error_codes.faiss"
-    },
+    # "General Error Codes": {
+    #     "doc": f"{DOCS_PATH}/PDF/error-codes.pdf",
+    #     "index": f"{FAISS_INDEX_PATH}/general_error_codes.faiss"
+    # },
     "Fagor CNC 8055": {
         "doc": f"{DOCS_PATH}/PDF/Fagor-CNC-8055-Error-Solution-English.pdf",
         "index": f"{FAISS_INDEX_PATH}/fagor_cnc_8055.faiss"
@@ -87,7 +87,7 @@ for machine, config in MACHINE_CONFIG.items():
         full_text = " ".join([doc.page_content for doc in documents])
         
         # Regex to find error codes and their descriptions
-        pattern = r"(\d{3,})\s*['\]([^\]]+)['\]"
+        pattern = r"(\d{3,})\s*'([^']*)'"
         matches = list(re.finditer(pattern, full_text))
         
         texts = []
@@ -157,7 +157,7 @@ async def ask_query(query: Query):
 
     # 4. Create the processing chain
     chain = (
-        {{"context": mq_retriever, "query": RunnablePassthrough()}}
+        {"context": mq_retriever, "query": RunnablePassthrough()}
         | prompt
         | llm
         | StrOutputParser()

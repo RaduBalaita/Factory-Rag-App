@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const InputBar = ({ onSendMessage }) => {
+const InputBar = ({ onSendMessage, onClearChat }) => {
     const [query, setQuery] = useState('');
 
     const handleSubmit = () => {
@@ -12,6 +12,7 @@ const InputBar = ({ onSendMessage }) => {
 
     return (
         <div className="input-bar">
+            <button className="clear-btn" onClick={onClearChat}>Clear</button>
             <input 
                 type="text" 
                 placeholder="Describe your problem..." 
@@ -19,7 +20,7 @@ const InputBar = ({ onSendMessage }) => {
                 onChange={(e) => setQuery(e.target.value)} 
                 onKeyPress={(e) => e.key === 'Enter' && handleSubmit()} 
             />
-            <button onClick={handleSubmit}>Send</button>
+            <button className="send-btn" onClick={handleSubmit}>Send</button>
         </div>
     );
 };
