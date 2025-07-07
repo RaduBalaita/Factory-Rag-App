@@ -81,7 +81,7 @@ function App() {
                     <button onClick={(e) => { e.stopPropagation(); setSettingsSidebarOpen(true); }}>&#9881;</button>
                 </div>
                 <ChatWindow messages={messages} />
-                <InputBar onSendMessage={handleSendMessage} onClearChat={handleClearChat} />
+                <InputBar onSendMessage={handleSendMessage} onClearChat={handleClearChat} language={language} />
             </div>
             <SystemPromptModal 
                 isOpen={isSystemPromptModalOpen} 

@@ -69,7 +69,7 @@ const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLangua
             case 'language':
                 return <div className="setting-item"><span>{t.language}</span><button onClick={() => setLanguage(language === 'en' ? 'ro' : 'en')}>{language === 'en' ? t.romanian : t.english}</button></div>;
             case 'font-size':
-                return <div className="setting-item"><span>{t.fontSize}</span><div><button onClick={() => setFontSize(14)}>14</button><button onClick={() => setFontSize(16)}>16</button><button onClick={() => setFontSize(18)}>18</button></div></div>;
+                return <div className="setting-item"><span>{t.fontSize}</span><div><button onClick={() => setFontSize(14)}>14</button><button onClick={() => setFontSize(16)}>16</button><button onClick={() => setFontSize(18)}>18</button><button onClick={() => setFontSize(20)}>20</button></div></div>;
             case 'system-prompt':
                 return <div className="setting-item"><span>{t.systemPrompt}</span><button onClick={openSystemPrompt}>{t.edit}</button></div>;
             default:

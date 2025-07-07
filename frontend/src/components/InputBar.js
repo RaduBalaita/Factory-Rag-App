@@ -1,7 +1,22 @@
 import React, { useState } from 'react';
 
-const InputBar = ({ onSendMessage, onClearChat }) => {
+const translations = {
+    en: {
+        describeProblem: 'Describe your problem...',
+        clear: 'Clear',
+        send: 'Send',
+    },
+    ro: {
+        describeProblem: 'Descrie problema ta...',
+        clear: 'Curăță',
+        send: 'Trimite',
+    },
+};
+
+const InputBar = ({ onSendMessage, onClearChat, language }) => {
     const [query, setQuery] = useState('');
+
+    const t = translations[language];
 
     const handleSubmit = () => {
         if (query.trim()) {
@@ -12,15 +27,15 @@ const InputBar = ({ onSendMessage, onClearChat }) => {
 
     return (
         <div className="input-bar">
-            <button className="clear-btn" onClick={onClearChat}>Clear</button>
+            <button className="clear-btn" onClick={onClearChat}>{t.clear}</button>
             <input 
                 type="text" 
-                placeholder="Describe your problem..." 
+                placeholder={t.describeProblem} 
                 value={query} 
                 onChange={(e) => setQuery(e.target.value)} 
                 onKeyPress={(e) => e.key === 'Enter' && handleSubmit()} 
             />
-            <button className="send-btn" onClick={handleSubmit}>Send</button>
+            <button className="send-btn" onClick={handleSubmit}>{t.send}</button>
         </div>
     );
 };
