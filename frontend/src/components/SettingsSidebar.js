@@ -29,7 +29,7 @@ const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLangua
     const sensors = useSensors(
         useSensor(PointerSensor, {
             activationConstraint: {
-                delay: 1000, // 1 second delay
+                delay: 100, // 0.1 second delay
                 tolerance: 5,
             },
         })
