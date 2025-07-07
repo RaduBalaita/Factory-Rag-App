@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './App.css';
 import ChatWindow from './components/ChatWindow';
 import InputBar from './components/InputBar';
@@ -10,13 +10,22 @@ function App() {
     const [isMachineSidebarOpen, setMachineSidebarOpen] = useState(false);
     const [isSettingsSidebarOpen, setSettingsSidebarOpen] = useState(false);
     const [isSystemPromptModalOpen, setSystemPromptModalOpen] = useState(false);
-    const [machine, setMachine] = useState('Yaskawa Alarm 380500');
-    const [theme, setTheme] = useState('light');
-    const [language, setLanguage] = useState('en');
-    const [fontSize, setFontSize] = useState(16);
-    const [systemPrompt, setSystemPrompt] = useState('You are a helpful assistant.');
+
+    const [machine, setMachine] = useState(() => localStorage.getItem('machine') || 'Yaskawa Alarm 380500');
+    const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
+    const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en');
+    const [fontSize, setFontSize] = useState(() => parseInt(localStorage.getItem('fontSize'), 10) || 16);
+    const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('systemPrompt') || 'You are a helpful assistant.');
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        localStorage.setItem('machine', machine);
+        localStorage.setItem('theme', theme);
+        localStorage.setItem('language', language);
+        localStorage.setItem('fontSize', fontSize);
+        localStorage.setItem('systemPrompt', systemPrompt);
+    }, [machine, theme, language, fontSize, systemPrompt]);
 
     const handleSendMessage = async (query) => {
         const newMessages = [...messages, { text: query, sender: 'user' }];

@@ -129,6 +129,7 @@
   padding: 10px;
   border: 1px solid #ccc;
   border-radius: 5px;
+  font-size: inherit;
 }
 
 .App.dark .input-bar input {

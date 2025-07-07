@@ -14,7 +14,9 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
 # Set the API key
-os.environ["GOOGLE_API_KEY"] = "AIzaSyD7PrAIzcfpThTw00OnMIW_WDv394FTLMQ"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable not set")
 
 app = FastAPI()
 
@@ -145,13 +147,12 @@ async def ask_query(query: Query):
 
     **IMPORTANT:** Only use information from the context that is explicitly and exactly about the provided error code. Ignore any information related to other error codes, even if they are numerically similar. If the context does not contain specific information for the queried error code, state that the information is not available.
 
-    Translate the final response to {query.language}.
-
     Context: {{context}}
 
     Query: {{query}}
 
     Answer:
+    Translate the final response to {query.language}.
     """
     prompt = PromptTemplate(template=template, input_variables=["context", "query"])
 
