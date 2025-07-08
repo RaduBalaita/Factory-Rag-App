@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -14,8 +15,11 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
 # Set the API key
-os.environ["GOOGLE_API_KEY"] = "AIzaSyD7PrAIzcfpThTw00OnMIW_WDv394FTLMQ"
-
+load_dotenv()  # Load environment variables from .env
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable not set")
+    
 app = FastAPI()
 
 app.add_middleware(
@@ -84,26 +88,34 @@ for machine, config in MACHINE_CONFIG.items():
         loader = PyMuPDFLoader(config["doc"])
         documents = loader.load()
         # Custom splitting logic based on error codes
-        full_text = " ".join([doc.page_content for doc in documents])
+        full_text = "\n".join([doc.page_content for doc in documents])
         
-        # Regex to find error codes and their descriptions
-        pattern = r"(\d{3,})\s*'([^']*)'"
-        matches = list(re.finditer(pattern, full_text))
+        # This pattern splits the text at the beginning of each error code.
+        # It looks for a newline, followed by 3+ digits, optional space, and an opening quote.
+        pattern = r"(\n\d{3,}\s*[‘’'])"
+        
+        # Split the text by the pattern, keeping the delimiter.
+        split_text = re.split(pattern, full_text)
         
         texts = []
-        if matches:
-            for i in range(len(matches)):
-                start = matches[i].start()
-                end = matches[i+1].start() if i+1 < len(matches) else len(full_text)
+        # The list alternates [header, delimiter, content, delimiter, content, ...].
+        # We combine each delimiter with the content that follows it.
+        if len(split_text) > 1:
+            for i in range(1, len(split_text), 2):
+                # The delimiter is the error code prefix (e.g., "\n1066 ‘").
+                delimiter = split_text[i]
+                # The content is the description that follows.
+                content = split_text[i+1] if (i + 1) < len(split_text) else ""
                 
-                chunk_content = full_text[start:end]
+                # Combine them and strip leading/trailing whitespace.
+                chunk_content = (delimiter + content).strip()
                 
                 # Clean the chunk content
-                chunk_content = re.sub(r"·M· Model Ref\\. \\d+", "", chunk_content)
+                chunk_content = re.sub(r"·M· Model Ref\. \d+", "", chunk_content)
                 chunk_content = re.sub(r"Error solution", "", chunk_content)
-                chunk_content = re.sub(r"CNC \\d+ ·M·", "", chunk_content)
+                chunk_content = re.sub(r"CNC \d+ ·M·", "", chunk_content)
                 chunk_content = chunk_content.replace("", "")
-                chunk_content = re.sub(r'\\s+', ' ', chunk_content).strip()
+                chunk_content = re.sub(r'\s+', ' ', chunk_content).strip()
                 
                 if chunk_content:
                     texts.append(Document(page_content=chunk_content))
@@ -145,13 +157,12 @@ async def ask_query(query: Query):
 
     **IMPORTANT:** Only use information from the context that is explicitly and exactly about the provided error code. Ignore any information related to other error codes, even if they are numerically similar. If the context does not contain specific information for the queried error code, state that the information is not available.
 
-    Translate the final response to {query.language}.
-
     Context: {{context}}
 
     Query: {{query}}
 
     Answer:
+    Translate the final response to {query.language}.
     """
     prompt = PromptTemplate(template=template, input_variables=["context", "query"])
 

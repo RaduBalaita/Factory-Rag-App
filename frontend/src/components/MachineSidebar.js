@@ -1,7 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+
+const initialMachines = [
+    { id: 'yaskawa', name: 'Yaskawa Alarm 380500' },
+    { id: 'general', name: 'General Error Codes' },
+    { id: 'fagor', name: 'Fagor CNC 8055' },
+    { id: 'fc-gtr', name: 'FC-GTR V2.1' },
+    { id: 'num-cnc', name: 'NUM CNC' },
+];
 
 const SortableItem = ({ id, children }) => {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id });
@@ -19,18 +27,22 @@ const SortableItem = ({ id, children }) => {
 };
 
 const MachineSidebar = ({ isOpen, onClose, setMachine }) => {
-    const [machines, setMachines] = useState([
-        { id: 'yaskawa', name: 'Yaskawa Alarm 380500' },
-        { id: 'general', name: 'General Error Codes' },
-        { id: 'fagor', name: 'Fagor CNC 8055' },
-        { id: 'fc-gtr', name: 'FC-GTR V2.1' },
-        { id: 'num-cnc', name: 'NUM CNC' },
-    ]);
+    const [machines, setMachines] = useState(() => {
+        const savedMachines = localStorage.getItem('machines');
+        if (savedMachines) {
+            return JSON.parse(savedMachines);
+        }
+        return initialMachines;
+    });
+
+    useEffect(() => {
+        localStorage.setItem('machines', JSON.stringify(machines));
+    }, [machines]);
 
     const sensors = useSensors(
         useSensor(PointerSensor, {
             activationConstraint: {
-                delay: 1000, // 1 second delay
+                delay: 100, // 0.1 second delay
                 tolerance: 5,
             },
         })

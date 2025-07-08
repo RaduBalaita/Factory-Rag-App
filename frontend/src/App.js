@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './App.css';
 import ChatWindow from './components/ChatWindow';
 import InputBar from './components/InputBar';
@@ -10,13 +10,22 @@ function App() {
     const [isMachineSidebarOpen, setMachineSidebarOpen] = useState(false);
     const [isSettingsSidebarOpen, setSettingsSidebarOpen] = useState(false);
     const [isSystemPromptModalOpen, setSystemPromptModalOpen] = useState(false);
-    const [machine, setMachine] = useState('Yaskawa Alarm 380500');
-    const [theme, setTheme] = useState('light');
-    const [language, setLanguage] = useState('en');
-    const [fontSize, setFontSize] = useState(16);
-    const [systemPrompt, setSystemPrompt] = useState('You are a helpful assistant.');
+
+    const [machine, setMachine] = useState(() => localStorage.getItem('machine') || 'Yaskawa Alarm 380500');
+    const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
+    const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en');
+    const [fontSize, setFontSize] = useState(() => parseInt(localStorage.getItem('fontSize'), 10) || 16);
+    const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('systemPrompt') || 'You are a helpful assistant.');
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        localStorage.setItem('machine', machine);
+        localStorage.setItem('theme', theme);
+        localStorage.setItem('language', language);
+        localStorage.setItem('fontSize', fontSize);
+        localStorage.setItem('systemPrompt', systemPrompt);
+    }, [machine, theme, language, fontSize, systemPrompt]);
 
     const handleSendMessage = async (query) => {
         const newMessages = [...messages, { text: query, sender: 'user' }];
@@ -45,13 +54,14 @@ function App() {
         setMessages([]);
     };
 
+    const handleContentClick = () => {
+        if (isMachineSidebarOpen) setMachineSidebarOpen(false);
+        if (isSettingsSidebarOpen) setSettingsSidebarOpen(false);
+        if (isSystemPromptModalOpen) setSystemPromptModalOpen(false);
+    };
+
     return (
-        <div className={`App ${theme}`} style={{ fontSize: `${fontSize}px` }}>
-            <div className="top-bar">
-                <button onClick={() => setMachineSidebarOpen(true)}>&#9776;</button>
-                <span className="machine-name">{machine}</span>
-                <button onClick={() => setSettingsSidebarOpen(true)}>&#9881;</button>
-            </div>
+        <div className={`App ${theme} ${isMachineSidebarOpen ? 'machine-sidebar-open' : ''} ${isSettingsSidebarOpen ? 'settings-sidebar-open' : ''}`} style={{ fontSize: `${fontSize}px` }}>
             <MachineSidebar isOpen={isMachineSidebarOpen} onClose={() => setMachineSidebarOpen(false)} setMachine={setMachine} />
             <SettingsSidebar 
                 isOpen={isSettingsSidebarOpen} 
@@ -64,14 +74,21 @@ function App() {
                 setFontSize={setFontSize}
                 openSystemPrompt={() => setSystemPromptModalOpen(true)} 
             />
+            <div className="main-content" onClick={handleContentClick}>
+                <div className="top-bar">
+                    <button onClick={(e) => { e.stopPropagation(); setMachineSidebarOpen(true); }}>&#9776;</button>
+                    <span className="machine-name">{machine}</span>
+                    <button onClick={(e) => { e.stopPropagation(); setSettingsSidebarOpen(true); }}>&#9881;</button>
+                </div>
+                <ChatWindow messages={messages} />
+                <InputBar onSendMessage={handleSendMessage} onClearChat={handleClearChat} language={language} />
+            </div>
             <SystemPromptModal 
                 isOpen={isSystemPromptModalOpen} 
                 onClose={() => setSystemPromptModalOpen(false)} 
                 systemPrompt={systemPrompt} 
                 setSystemPrompt={setSystemPrompt} 
             />
-            <ChatWindow messages={messages} />
-            <InputBar onSendMessage={handleSendMessage} onClearChat={handleClearChat} />
         </div>
     );
 }

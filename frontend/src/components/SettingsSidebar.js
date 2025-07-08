@@ -1,7 +1,36 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+
+const translations = {
+    en: {
+        settings: 'Settings',
+        theme: 'Theme',
+        lightMode: 'Light Mode',
+        darkMode: 'Dark Mode',
+        language: 'Language',
+        english: 'English',
+        romanian: 'Romanian',
+        fontSize: 'Font Size',
+        systemPrompt: 'System Prompt',
+        edit: 'Edit',
+    },
+    ro: {
+        settings: 'Setări',
+        theme: 'Temă',
+        lightMode: 'Mod Luminos',
+        darkMode: 'Mod Întunecat',
+        language: 'Limbă',
+        english: 'Engleză',
+        romanian: 'Română',
+        fontSize: 'Dimensiune Font',
+        systemPrompt: 'Prompt Sistem',
+        edit: 'Editează',
+    },
+};
+
+const initialSettingIds = ['theme', 'language', 'font-size', 'system-prompt'];
 
 const SortableItem = ({ id, children }) => {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id });
@@ -19,17 +48,39 @@ const SortableItem = ({ id, children }) => {
 };
 
 const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLanguage, openSystemPrompt, fontSize, setFontSize }) => {
-    const [settings, setSettings] = useState([
-        { id: 'theme', content: <div className="setting-item"><span>Theme</span><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>{theme === 'light' ? 'Dark' : 'Light'} Mode</button></div> },
-        { id: 'language', content: <div className="setting-item"><span>Language</span><button onClick={() => setLanguage(language === 'en' ? 'ro' : 'en')}>{language === 'en' ? 'Romanian' : 'English'}</button></div> },
-        { id: 'font-size', content: <div className="setting-item"><span>Font Size</span><div><button onClick={() => setFontSize(fontSize - 1)}>-</button><span>{fontSize}px</span><button onClick={() => setFontSize(fontSize + 1)}>+</button></div></div> },
-        { id: 'system-prompt', content: <div className="setting-item"><button onClick={openSystemPrompt}>Edit System Prompt</button></div> },
-    ]);
+    const [settingIds, setSettingIds] = useState(() => {
+        const savedSettingIds = localStorage.getItem('settingIds');
+        if (savedSettingIds) {
+            return JSON.parse(savedSettingIds);
+        }
+        return initialSettingIds;
+    });
+
+    useEffect(() => {
+        localStorage.setItem('settingIds', JSON.stringify(settingIds));
+    }, [settingIds]);
+
+    const t = translations[language];
+
+    const getSettingContent = (id) => {
+        switch (id) {
+            case 'theme':
+                return <div className="setting-item"><span>{t.theme}</span><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>{theme === 'light' ? t.darkMode : t.lightMode}</button></div>;
+            case 'language':
+                return <div className="setting-item"><span>{t.language}</span><button onClick={() => setLanguage(language === 'en' ? 'ro' : 'en')}>{language === 'en' ? t.romanian : t.english}</button></div>;
+            case 'font-size':
+                return <div className="setting-item"><span>{t.fontSize}</span><div><button onClick={() => setFontSize(14)}>14</button><button onClick={() => setFontSize(16)}>16</button><button onClick={() => setFontSize(18)}>18</button><button onClick={() => setFontSize(20)}>20</button></div></div>;
+            case 'system-prompt':
+                return <div className="setting-item"><span>{t.systemPrompt}</span><button onClick={openSystemPrompt}>{t.edit}</button></div>;
+            default:
+                return null;
+        }
+    };
 
     const sensors = useSensors(
         useSensor(PointerSensor, {
             activationConstraint: {
-                delay: 1000, // 1 second delay
+                delay: 100, // 0.1 second delay
                 tolerance: 5,
             },
         })
@@ -38,9 +89,9 @@ const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLangua
     const handleDragEnd = (event) => {
         const { active, over } = event;
         if (active.id !== over.id) {
-            setSettings((items) => {
-                const oldIndex = items.findIndex((item) => item.id === active.id);
-                const newIndex = items.findIndex((item) => item.id === over.id);
+            setSettingIds((items) => {
+                const oldIndex = items.findIndex((item) => item === active.id);
+                const newIndex = items.findIndex((item) => item === over.id);
                 return arrayMove(items, oldIndex, newIndex);
             });
         }
@@ -50,14 +101,14 @@ const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLangua
         <div className={`sidebar settings-sidebar ${isOpen ? 'open' : ''}`}>
             <div className="sidebar-header">
                 <button onClick={onClose} className="close-btn">&times;</button>
-                <h3>Settings</h3>
+                <h3>{t.settings}</h3>
             </div>
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={settings} strategy={verticalListSortingStrategy}>
+                <SortableContext items={settingIds} strategy={verticalListSortingStrategy}>
                     <div className="sidebar-content">
-                        {settings.map(setting => (
-                            <SortableItem key={setting.id} id={setting.id}>
-                                {setting.content}
+                        {settingIds.map(id => (
+                            <SortableItem key={id} id={id}>
+                                {getSettingContent(id)}
                             </SortableItem>
                         ))}
                     </div>
