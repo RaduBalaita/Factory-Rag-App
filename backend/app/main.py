@@ -7,12 +7,14 @@ from langchain_google_genai import GoogleGenerativeAI, HarmBlockThreshold, HarmC
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_core.documents import Document
 import re
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from langchain.chains.query_constructor.base import AttributeInfo
+from langchain.retrievers.self_query.base import SelfQueryRetriever
 
 # Set the API key
 load_dotenv()  # Load environment variables from .env
@@ -71,58 +73,42 @@ llm = GoogleGenerativeAI(
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
 )
-
 # Initialize embeddings
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Load or create FAISS indexes
 if not os.path.exists(FAISS_INDEX_PATH):
     os.makedirs(FAISS_INDEX_PATH)
 
 for machine, config in MACHINE_CONFIG.items():
     if os.path.exists(config["index"]):
-        print(f"Loading existing FAISS index for {machine}")
-        config["db"] = FAISS.load_local(config["index"], embeddings, allow_dangerous_deserialization=True)
+        print(f"Loading existing Chroma index for {machine}")
+        config["db"] = Chroma(persist_directory=config["index"], embedding_function=embeddings)
     else:
-        print(f"Creating new FAISS index for {machine}")
+        print(f"Creating new Chroma index for {machine}")
         loader = PyMuPDFLoader(config["doc"])
         documents = loader.load()
-        # Custom splitting logic based on error codes
         full_text = "\n".join([doc.page_content for doc in documents])
-        
-        # This pattern splits the text at the beginning of each error code.
-        # It looks for a newline, followed by 3+ digits, optional space, and an opening quote.
-        pattern = r"(\n\d{3,}\s*[‘’'])"
-        
-        # Split the text by the pattern, keeping the delimiter.
+
+        pattern = r"\n(\d{3,})\s*[‘’']"
         split_text = re.split(pattern, full_text)
-        
-        texts = []
-        # The list alternates [header, delimiter, content, delimiter, content, ...].
-        # We combine each delimiter with the content that follows it.
+        texts_with_metadata = []
         if len(split_text) > 1:
             for i in range(1, len(split_text), 2):
-                # The delimiter is the error code prefix (e.g., "\n1066 ‘").
-                delimiter = split_text[i]
-                # The content is the description that follows.
-                content = split_text[i+1] if (i + 1) < len(split_text) else ""
-                
-                # Combine them and strip leading/trailing whitespace.
-                chunk_content = (delimiter + content).strip()
-                
-                # Clean the chunk content
-                chunk_content = re.sub(r"·M· Model Ref\. \d+", "", chunk_content)
-                chunk_content = re.sub(r"Error solution", "", chunk_content)
-                chunk_content = re.sub(r"CNC \d+ ·M·", "", chunk_content)
-                chunk_content = chunk_content.replace("", "")
-                chunk_content = re.sub(r'\s+', ' ', chunk_content).strip()
-                
-                if chunk_content:
-                    texts.append(Document(page_content=chunk_content))
-
-        if texts:
-            db = FAISS.from_documents(texts, embeddings)
-            db.save_local(config["index"])
+                error_code = split_text[i].strip()
+                content = split_text[i+1].strip() if (i + 1) < len(split_text) else ""
+                full_chunk_content = f"{error_code} ‘{content}"
+                full_chunk_content = re.sub(r"·M· Model Ref\\. \\d+", "", full_chunk_content)
+                full_chunk_content = re.sub(r"Error solution", "", full_chunk_content)
+                full_chunk_content = re.sub(r"CNC \\d+ ·M·", "", full_chunk_content)
+                full_chunk_content = full_chunk_content.replace("", "")
+                full_chunk_content = re.sub(r'\\s+', ' ', full_chunk_content).strip()
+                if full_chunk_content and error_code:
+                    metadata = {"error_code": error_code, "machine": machine}
+                    doc = Document(page_content=full_chunk_content, metadata=metadata)
+                    texts_with_metadata.append(doc)
+        if texts_with_metadata:
+            db = Chroma.from_documents(texts_with_metadata, embeddings, persist_directory=config["index"])
+            db.persist()
             config["db"] = db
         else:
             print(f"WARNING: No text chunks were created for {machine}. The index will be empty.")
@@ -134,19 +120,38 @@ async def ask_query(query: Query):
     if not config:
         return {"error": "Machine not found"}
 
-    # 1. Use the pre-loaded FAISS index
     db = config.get("db")
     if not db:
         return {"response": f"The document index for '{query.machine}' is empty. This likely means the PDF could not be processed correctly. Please check the document format."}
-    
-    retriever = db.as_retriever(search_kwargs={"k": 5})
 
-    # 2. Use MultiQueryRetriever
-    mq_retriever = MultiQueryRetriever.from_llm(
-        retriever=retriever, llm=llm
+    # 1. Define metadata fields for the SelfQueryRetriever
+    metadata_field_info = [
+        AttributeInfo(
+            name="error_code",
+            description="The numeric error code for a machine fault, like '1066' or '0079'.",
+            type="string",
+        ),
+        AttributeInfo(
+            name="machine",
+            description=f"The machine model the document is for, which is '{query.machine}'",
+            type="string",
+        ),
+    ]
+    document_content_description = "A description of a machine fault, its cause, and its solution."
+
+    # 2. Set up the SelfQueryRetriever
+    # This retriever can extract filters from the query (e.g., error_code = '1066')
+    # and apply them to the search.
+    retriever = SelfQueryRetriever.from_llm(
+        llm,
+        db,
+        document_content_description,
+        metadata_field_info,
+        verbose=True, # Set to True for debugging, False for production
+        search_kwargs={"k": 1} # We only need the one exact match
     )
 
-    # 3. Define the prompt template
+    # 3. Define the prompt template (remains largely the same)
     template = f"""
     {query.system_prompt}
     You will be given context from a machine's technical manual and an error code.
@@ -155,7 +160,7 @@ async def ask_query(query: Query):
     2. **Probable Causes:** List the most likely reasons for this error from the context.
     3. **Solution Steps:** Provide a clear, step-by-step guide to fix the issue using only information from the context.
 
-    **IMPORTANT:** Only use information from the context that is explicitly and exactly about the provided error code. Ignore any information related to other error codes, even if they are numerically similar. If the context does not contain specific information for the queried error code, state that the information is not available.
+    **IMPORTANT:** Only use information from the provided context. If the context is empty or does not contain specific information for the queried error code, state that "No specific information was found for this error code in the manual."
 
     Context: {{context}}
 
@@ -166,19 +171,21 @@ async def ask_query(query: Query):
     """
     prompt = PromptTemplate(template=template, input_variables=["context", "query"])
 
-    # 4. Create the processing chain
+    # 4. Create the processing chain (simplified)
     chain = (
-        {"context": mq_retriever, "query": RunnablePassthrough()}
+        {"context": retriever, "query": RunnablePassthrough()}
         | prompt
         | llm
         | StrOutputParser()
     )
 
-    # 5. Invoke the chain with the user's query
-    response = await chain.ainvoke(f"What is the meaning of error code {query.query}?")
-
+    # 5. Invoke the chain. We pass only the error code, as the prompt adds context.
+    user_query = query.query
+    response = await chain.ainvoke(user_query)
+    
     # 6. Debugging: Print the retrieved context
-    retrieved_docs = await mq_retriever.ainvoke(f"What is the meaning of error code {query.query}?")
+    retrieved_docs = await retriever.ainvoke(user_query)
     print("Retrieved Context:", "\n".join([doc.page_content for doc in retrieved_docs]))
+    print("Retrieved Metadata:", [doc.metadata for doc in retrieved_docs])
 
     return {"response": response}
