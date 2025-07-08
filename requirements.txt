@@ -11,3 +11,4 @@ google-generativeai
 pypdf
 pypdfium2
 pymupdf
+unstructured[local-inference]
