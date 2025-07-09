@@ -34,11 +34,39 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+DEFAULT_PROMPT_TEMPLATE = """You will be given context from a machine's technical manual and an error code.
+Structure your response in three distinct sections:
+1. **Problem Description:** Briefly explain what the error code means based on the context.
+2. **Probable Causes:** List the most likely reasons for this error from the context.
+3. **Solution Steps:** Provide a clear, step-by-step guide to fix the issue using only information from the context.
+
+**IMPORTANT:** Only use information from the provided context. If the context is empty or does not contain specific information for the queried error code, state that "No specific information was found for this error code in the manual."
+
+Context: {context}
+
+Query: {query}
+
+Answer:
+"""
+
+# Global variable to store the prompt template
+prompt_template_str = DEFAULT_PROMPT_TEMPLATE
+
 class Query(BaseModel):
     machine: str
     query: str
     language: str = 'en'
     system_prompt: str = 'You are a helpful assistant.'
+
+@app.get("/prompt_template")
+async def get_prompt_template():
+    return {"prompt_template": prompt_template_str}
+
+@app.post("/prompt_template")
+async def set_prompt_template(request: dict):
+    global prompt_template_str
+    prompt_template_str = request.get("prompt_template", DEFAULT_PROMPT_TEMPLATE)
+    return {"prompt_template": prompt_template_str}
 
 # Configure the paths to your docs and FAISS index
 DOCS_PATH = "C:/Users/Tempest/Desktop/RAG/docs"
@@ -151,29 +179,29 @@ async def ask_query(query: Query):
         search_kwargs={"k": 1}
     )
 
-    # 3. Define the prompt template
-    template = f'''
-    {query.system_prompt}
-    You will be given context from a machine's technical manual and an error code.
-    Structure your response in three distinct sections:
-    1. **Problem Description:** Briefly explain what the error code means based on the context.
-    2. **Probable Causes:** List the most likely reasons for this error from the context.
-    3. **Solution Steps:** Provide a clear, step-by-step guide to fix the issue using only information from the context.
-
-    **IMPORTANT:** Only use information from the provided context. If the context is empty or does not contain specific information for the queried error code, state that "No specific information was found for this error code in the manual."
-
-    Context: {{context}}
-
-    Query: {{query}}
-
-    Answer:
-    Translate the final response to {query.language}.
-    '''
-    prompt = PromptTemplate(template=template, input_variables=["context", "query"])
+    # 3. Define the prompt template using the global template
+    # The user-editable part is now the whole template.
+    # The 'system_prompt' from the query can still be used if you want to prepend it.
+    language_instruction = ""
+    if query.language == "ro":
+        language_instruction = "\nIMPORTANT: Respond ONLY in Romanian language."
+    elif query.language == "en":
+        language_instruction = "\nIMPORTANT: Respond ONLY in English language."
+    
+    final_template_str = f"{{system_prompt}}\n\n{prompt_template_str}{language_instruction}"
+    
+    prompt = PromptTemplate(
+        template=final_template_str,
+        input_variables=["system_prompt", "context", "query"]
+    )
 
     # 4. Create the processing chain
     chain = (
-        {"context": retriever, "query": RunnablePassthrough()}
+        {
+            "context": retriever,
+            "query": RunnablePassthrough(),
+            "system_prompt": lambda x: query.system_prompt, # Pass the system prompt from the query
+        }
         | prompt
         | llm
         | StrOutputParser()

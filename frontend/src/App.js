@@ -24,19 +24,34 @@ function App() {
     const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
     const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en');
     const [fontSize, setFontSize] = useState(() => parseInt(localStorage.getItem('fontSize'), 10) || 16);
-    const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('systemPrompt') || 'You are a helpful assistant.');
+    const [promptTemplate, setPromptTemplate] = useState('');
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(false);
 
     const t = translations[language];
 
     useEffect(() => {
+        const fetchPromptTemplate = async () => {
+            try {
+                const res = await fetch('http://127.0.0.1:8000/prompt_template');
+                const data = await res.json();
+                setPromptTemplate(data.prompt_template);
+            } catch (error) {
+                console.error("Failed to fetch prompt template:", error);
+                // Set a fallback template if the fetch fails
+                setPromptTemplate('You are a helpful assistant.');
+            }
+        };
+        fetchPromptTemplate();
+    }, []);
+
+    useEffect(() => {
         localStorage.setItem('machine', machine);
         localStorage.setItem('theme', theme);
         localStorage.setItem('language', language);
         localStorage.setItem('fontSize', fontSize);
-        localStorage.setItem('systemPrompt', systemPrompt);
-    }, [machine, theme, language, fontSize, systemPrompt]);
+        localStorage.setItem('promptTemplate', promptTemplate);
+    }, [machine, theme, language, fontSize, promptTemplate]);
 
     const handleSendMessage = async (query) => {
         const newMessages = [...messages, { text: query, sender: 'user' }];
@@ -53,7 +68,7 @@ function App() {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ machine, query, language, system_prompt: systemPrompt }),
+                body: JSON.stringify({ machine, query, language, system_prompt: "You are a helpful assistant." }), // System prompt is now part of the template
             });
 
             const reader = res.body.getReader();
@@ -85,6 +100,19 @@ function App() {
         if (isSystemPromptModalOpen) setSystemPromptModalOpen(false);
     };
 
+    const handlePromptTemplateSave = async () => {
+        try {
+            await fetch('http://127.0.0.1:8000/prompt_template', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt_template: promptTemplate }),
+            });
+        } catch (error) {
+            console.error('Failed to save prompt template:', error);
+        }
+        setSystemPromptModalOpen(false);
+    };
+
     return (
         <div className={`App ${theme} ${isMachineSidebarOpen ? 'machine-sidebar-open' : ''} ${isSettingsSidebarOpen ? 'settings-sidebar-open' : ''}`} style={{ fontSize: `${fontSize}px` }}>
             <MachineSidebar isOpen={isMachineSidebarOpen} onClose={() => setMachineSidebarOpen(false)} setMachine={setMachine} />
@@ -111,8 +139,9 @@ function App() {
             <SystemPromptModal 
                 isOpen={isSystemPromptModalOpen} 
                 onClose={() => setSystemPromptModalOpen(false)} 
-                systemPrompt={systemPrompt} 
-                setSystemPrompt={setSystemPrompt} 
+                systemPrompt={promptTemplate} 
+                setSystemPrompt={setPromptTemplate} 
+                onSave={handlePromptTemplateSave}
             />
         </div>
     );
