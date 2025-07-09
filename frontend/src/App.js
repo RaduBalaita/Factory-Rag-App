@@ -6,6 +6,15 @@ import MachineSidebar from './components/MachineSidebar';
 import SettingsSidebar from './components/SettingsSidebar';
 import SystemPromptModal from './components/SystemPromptModal';
 
+const translations = {
+    en: {
+        thinking: 'Thinking...',
+    },
+    ro: {
+        thinking: 'Gândire...',
+    },
+};
+
 function App() {
     const [isMachineSidebarOpen, setMachineSidebarOpen] = useState(false);
     const [isSettingsSidebarOpen, setSettingsSidebarOpen] = useState(false);
@@ -18,6 +27,8 @@ function App() {
     const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('systemPrompt') || 'You are a helpful assistant.');
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(false);
+
+    const t = translations[language];
 
     useEffect(() => {
         localStorage.setItem('machine', machine);
@@ -32,6 +43,10 @@ function App() {
         setMessages(newMessages);
         setLoading(true);
 
+        // Add a thinking message
+        const thinkingMessage = { text: t.thinking, sender: 'bot' };
+        setMessages([...newMessages, thinkingMessage]);
+
         try {
             const res = await fetch('http://127.0.0.1:8000/query', {
                 method: 'POST',
@@ -40,9 +55,19 @@ function App() {
                 },
                 body: JSON.stringify({ machine, query, language, system_prompt: systemPrompt }),
             });
-            const data = await res.json();
-            const responseText = data.response || data.error || 'An error occurred.';
-            setMessages([...newMessages, { text: responseText, sender: 'bot' }]);
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let responseText = '';
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                responseText += decoder.decode(value, { stream: true });
+                setMessages([...newMessages, { text: responseText, sender: 'bot' }]);
+            }
+
         } catch (error) {
             setMessages([...newMessages, { text: 'An error occurred while fetching the response.', sender: 'bot' }]);
         } finally {

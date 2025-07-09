@@ -15,6 +15,8 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain.chains.query_constructor.base import AttributeInfo
 from langchain.retrievers.self_query.base import SelfQueryRetriever
+from fastapi.responses import StreamingResponse
+from typing import AsyncIterator
 
 # Set the API key
 load_dotenv()  # Load environment variables from .env
@@ -48,10 +50,6 @@ MACHINE_CONFIG = {
         "doc": f"{DOCS_PATH}/PDF/1-1cvjgdf_ys840di_errorcode_of_alarm_380500-deu.pdf",
         "index": f"{FAISS_INDEX_PATH}/yaskawa_alarm_380500.faiss"
     },
-    # "General Error Codes": {
-    #     "doc": f"{DOCS_PATH}/PDF/error-codes.pdf",
-    #     "index": f"{FAISS_INDEX_PATH}/general_error_codes.faiss"
-    # },
     "Fagor CNC 8055": {
         "doc": f"{DOCS_PATH}/PDF/Fagor-CNC-8055-Error-Solution-English.pdf",
         "index": f"{FAISS_INDEX_PATH}/fagor_cnc_8055.faiss"
@@ -114,6 +112,10 @@ for machine, config in MACHINE_CONFIG.items():
             print(f"WARNING: No text chunks were created for {machine}. The index will be empty.")
             config["db"] = None
 
+async def stream_response(chain, user_query: str) -> AsyncIterator[str]:
+    async for chunk in chain.astream(user_query):
+        yield chunk
+
 @app.post("/query")
 async def ask_query(query: Query):
     config = MACHINE_CONFIG.get(query.machine)
@@ -140,19 +142,17 @@ async def ask_query(query: Query):
     document_content_description = "A description of a machine fault, its cause, and its solution."
 
     # 2. Set up the SelfQueryRetriever
-    # This retriever can extract filters from the query (e.g., error_code = '1066')
-    # and apply them to the search.
     retriever = SelfQueryRetriever.from_llm(
         llm,
         db,
         document_content_description,
         metadata_field_info,
-        verbose=True, # Set to True for debugging, False for production
-        search_kwargs={"k": 1} # We only need the one exact match
+        verbose=True,
+        search_kwargs={"k": 1}
     )
 
-    # 3. Define the prompt template (remains largely the same)
-    template = f"""
+    # 3. Define the prompt template
+    template = f'''
     {query.system_prompt}
     You will be given context from a machine's technical manual and an error code.
     Structure your response in three distinct sections:
@@ -168,10 +168,10 @@ async def ask_query(query: Query):
 
     Answer:
     Translate the final response to {query.language}.
-    """
+    '''
     prompt = PromptTemplate(template=template, input_variables=["context", "query"])
 
-    # 4. Create the processing chain (simplified)
+    # 4. Create the processing chain
     chain = (
         {"context": retriever, "query": RunnablePassthrough()}
         | prompt
@@ -179,13 +179,5 @@ async def ask_query(query: Query):
         | StrOutputParser()
     )
 
-    # 5. Invoke the chain. We pass only the error code, as the prompt adds context.
-    user_query = query.query
-    response = await chain.ainvoke(user_query)
-    
-    # 6. Debugging: Print the retrieved context
-    retrieved_docs = await retriever.ainvoke(user_query)
-    print("Retrieved Context:", "\n".join([doc.page_content for doc in retrieved_docs]))
-    print("Retrieved Metadata:", [doc.metadata for doc in retrieved_docs])
-
-    return {"response": response}
+    # 5. Return a streaming response
+    return StreamingResponse(stream_response(chain, query.query), media_type="text/event-stream")
