@@ -5,6 +5,7 @@ import InputBar from './components/InputBar';
 import MachineSidebar from './components/MachineSidebar';
 import SettingsSidebar from './components/SettingsSidebar';
 import SystemPromptModal from './components/SystemPromptModal';
+import ChangeModelModal from './components/ChangeModelModal';
 
 const translations = {
     en: {
@@ -19,16 +20,22 @@ function App() {
     const [isMachineSidebarOpen, setMachineSidebarOpen] = useState(false);
     const [isSettingsSidebarOpen, setSettingsSidebarOpen] = useState(false);
     const [isSystemPromptModalOpen, setSystemPromptModalOpen] = useState(false);
+    const [isChangeModelModalOpen, setChangeModelModalOpen] = useState(false);
 
     const [machine, setMachine] = useState(() => localStorage.getItem('machine') || 'Yaskawa Alarm 380500');
     const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
     const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en');
     const [fontSize, setFontSize] = useState(() => parseInt(localStorage.getItem('fontSize'), 10) || 16);
     const [promptTemplate, setPromptTemplate] = useState('');
+    const [modelConfig, setModelConfig] = useState(() => {
+        const savedConfig = localStorage.getItem('modelConfig');
+        return savedConfig ? JSON.parse(savedConfig) : { type: 'api', provider: 'google' };
+    });
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(false);
 
     const t = translations[language];
+
 
     useEffect(() => {
         const fetchPromptTemplate = async () => {
@@ -51,7 +58,8 @@ function App() {
         localStorage.setItem('language', language);
         localStorage.setItem('fontSize', fontSize);
         localStorage.setItem('promptTemplate', promptTemplate);
-    }, [machine, theme, language, fontSize, promptTemplate]);
+        localStorage.setItem('modelConfig', JSON.stringify(modelConfig));
+    }, [machine, theme, language, fontSize, promptTemplate, modelConfig]);
 
     const handleSendMessage = async (query) => {
         const newMessages = [...messages, { text: query, sender: 'user' }];
@@ -68,7 +76,13 @@ function App() {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ machine, query, language, system_prompt: "You are a helpful assistant." }), // System prompt is now part of the template
+                body: JSON.stringify({ 
+                    machine, 
+                    query, 
+                    language, 
+                    system_prompt: "You are a helpful assistant.",
+                    model_config: modelConfig 
+                }),
             });
 
             const reader = res.body.getReader();
@@ -98,6 +112,7 @@ function App() {
         if (isMachineSidebarOpen) setMachineSidebarOpen(false);
         if (isSettingsSidebarOpen) setSettingsSidebarOpen(false);
         if (isSystemPromptModalOpen) setSystemPromptModalOpen(false);
+        if (isChangeModelModalOpen) setChangeModelModalOpen(false);
     };
 
     const handlePromptTemplateSave = async () => {
@@ -126,6 +141,7 @@ function App() {
                 fontSize={fontSize}
                 setFontSize={setFontSize}
                 openSystemPrompt={() => setSystemPromptModalOpen(true)} 
+                openChangeModel={() => setChangeModelModalOpen(true)}
             />
             <div className="main-content" onClick={handleContentClick}>
                 <div className="top-bar">
@@ -142,6 +158,13 @@ function App() {
                 systemPrompt={promptTemplate} 
                 setSystemPrompt={setPromptTemplate} 
                 onSave={handlePromptTemplateSave}
+            />
+            <ChangeModelModal
+                isOpen={isChangeModelModalOpen}
+                onClose={() => setChangeModelModalOpen(false)}
+                language={language}
+                modelConfig={modelConfig}
+                setModelConfig={setModelConfig}
             />
         </div>
     );

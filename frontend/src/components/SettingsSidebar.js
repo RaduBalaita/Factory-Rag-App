@@ -15,6 +15,7 @@ const translations = {
         fontSize: 'Font Size',
         systemPrompt: 'System Prompt',
         edit: 'Edit',
+        changeModel: 'Change Model',
     },
     ro: {
         settings: 'Setări',
@@ -27,10 +28,11 @@ const translations = {
         fontSize: 'Dimensiune Font',
         systemPrompt: 'Prompt Sistem',
         edit: 'Editează',
+        changeModel: 'Schimbă Modelul',
     },
 };
 
-const initialSettingIds = ['theme', 'language', 'font-size', 'system-prompt'];
+const initialSettingIds = ['theme', 'language', 'font-size', 'system-prompt', 'change-model'];
 
 const SortableItem = ({ id, children }) => {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id });
@@ -47,13 +49,16 @@ const SortableItem = ({ id, children }) => {
     );
 };
 
-const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLanguage, openSystemPrompt, fontSize, setFontSize }) => {
+const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLanguage, openSystemPrompt, fontSize, setFontSize, openChangeModel }) => {
     const [settingIds, setSettingIds] = useState(() => {
-        const savedSettingIds = localStorage.getItem('settingIds');
-        if (savedSettingIds) {
-            return JSON.parse(savedSettingIds);
-        }
+        // Temporarily force reset to initial settings
         return initialSettingIds;
+        
+        // const savedSettingIds = localStorage.getItem('settingIds');
+        // if (savedSettingIds) {
+        //     return JSON.parse(savedSettingIds);
+        // }
+        // return initialSettingIds;
     });
 
     useEffect(() => {
@@ -72,6 +77,8 @@ const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLangua
                 return <div className="setting-item"><span>{t.fontSize}</span><div><button onClick={() => setFontSize(14)}>14</button><button onClick={() => setFontSize(16)}>16</button><button onClick={() => setFontSize(18)}>18</button><button onClick={() => setFontSize(20)}>20</button></div></div>;
             case 'system-prompt':
                 return <div className="setting-item"><span style={{ color: 'red' }}>{t.systemPrompt}</span><button onClick={openSystemPrompt}>{t.edit}</button></div>;
+            case 'change-model':
+                return <div className="setting-item"><span>{t.changeModel}</span><button onClick={openChangeModel}>{t.edit}</button></div>;
             default:
                 return null;
         }

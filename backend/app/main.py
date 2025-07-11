@@ -16,7 +16,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain.chains.query_constructor.base import AttributeInfo
 from langchain.retrievers.self_query.base import SelfQueryRetriever
 from fastapi.responses import StreamingResponse
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional, Dict, Any
+from langchain_community.llms import LlamaCpp
 
 # Set the API key
 load_dotenv()  # Load environment variables from .env
@@ -52,11 +53,18 @@ Answer:
 # Global variable to store the prompt template
 prompt_template_str = DEFAULT_PROMPT_TEMPLATE
 
+class ModelConfig(BaseModel):
+    type: str = 'api'
+    provider: Optional[str] = 'google'
+    api_key: Optional[str] = None
+    path: Optional[str] = None
+
 class Query(BaseModel):
     machine: str
     query: str
     language: str = 'en'
     system_prompt: str = 'You are a helpful assistant.'
+    model_config: ModelConfig = ModelConfig()
 
 @app.get("/prompt_template")
 async def get_prompt_template():
@@ -92,15 +100,35 @@ MACHINE_CONFIG = {
     }
 }
 
-# Initialize the LLM
-llm = GoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    safety_settings={
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
-)
 # Initialize embeddings
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+def get_llm(model_config: ModelConfig):
+    if model_config.type == 'local' and model_config.path:
+        if os.path.exists(model_config.path):
+            return LlamaCpp(
+                model_path=model_config.path,
+                n_gpu_layers=-1, # Offload all layers to GPU
+                n_batch=512,
+                n_ctx=2048,
+                f16_kv=True,  # Must be True on new models
+                verbose=True,
+            )
+        else:
+            raise ValueError(f"Local model path does not exist: {model_config.path}")
+    
+    # Default to Google Gemini
+    # Here you could add logic for other providers like OpenAI, Claude
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY environment variable not set")
+        
+    return GoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        google_api_key=GEMINI_API_KEY,
+        safety_settings={
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+    )
 
 if not os.path.exists(FAISS_INDEX_PATH):
     os.makedirs(FAISS_INDEX_PATH)
@@ -146,9 +174,15 @@ async def stream_response(chain, user_query: str) -> AsyncIterator[str]:
 
 @app.post("/query")
 async def ask_query(query: Query):
+    try:
+        llm = get_llm(query.model_config)
+    except ValueError as e:
+        return {"error": str(e)}
+
     config = MACHINE_CONFIG.get(query.machine)
     if not config:
         return {"error": "Machine not found"}
+
 
     db = config.get("db")
     if not db:

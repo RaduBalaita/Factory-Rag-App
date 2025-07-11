@@ -57,7 +57,7 @@ This project is a web-based application designed to assist factory employees by 
 1.  **Open a new terminal.**
 2.  Navigate to the backend directory:
     ```bash
-    cd C:\Users\Tempest\Desktop\RAG\backend
+    cd C:\Users\Tempest\Desktop\RAG
     ```
 3.  Create and activate a virtual environment:
     ```bash
