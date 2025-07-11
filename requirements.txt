@@ -12,3 +12,9 @@ pypdf
 pypdfium2
 pymupdf
 unstructured[local-inference]
+langchain-community[retrievers]
+chromadb
+lark
+llama-cpp-python
+langchain-openai
+langchain-anthropic

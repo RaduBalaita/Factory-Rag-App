@@ -7,12 +7,19 @@ from langchain_google_genai import GoogleGenerativeAI, HarmBlockThreshold, HarmC
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_core.documents import Document
 import re
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from langchain.chains.query_constructor.base import AttributeInfo
+from langchain.retrievers.self_query.base import SelfQueryRetriever
+from fastapi.responses import StreamingResponse
+from typing import AsyncIterator, Optional, Dict, Any
+from langchain_community.llms import LlamaCpp
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 
 # Set the API key
 load_dotenv()  # Load environment variables from .env
@@ -30,11 +37,59 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+DEFAULT_PROMPT_TEMPLATE = """You will be given context from a machine's technical manual and an error code.
+Structure your response in three distinct sections:
+1. **Problem Description:** Briefly explain what the error code means based on the context.
+2. **Probable Causes:** List the most likely reasons for this error from the context.
+3. **Solution Steps:** Provide a clear, step-by-step guide to fix the issue using only information from the context.
+
+**IMPORTANT:** Only use information from the provided context. If the context is empty or does not contain specific information for the queried error code, state that "No specific information was found for this error code in the manual."
+
+Context: {context}
+
+Query: {query}
+
+Answer:
+"""
+
+# Global variable to store the prompt template
+prompt_template_str = DEFAULT_PROMPT_TEMPLATE
+
+class ModelConfig(BaseModel):
+    type: str = 'api'
+    provider: Optional[str] = 'google'
+    api_key: Optional[str] = None
+    path: Optional[str] = None
+
 class Query(BaseModel):
     machine: str
     query: str
     language: str = 'en'
     system_prompt: str = 'You are a helpful assistant.'
+    model_config: ModelConfig = ModelConfig()
+
+@app.get("/prompt_template")
+async def get_prompt_template():
+    return {"prompt_template": prompt_template_str}
+
+@app.post("/prompt_template")
+async def set_prompt_template(request: dict):
+    global prompt_template_str
+    prompt_template_str = request.get("prompt_template", DEFAULT_PROMPT_TEMPLATE)
+    return {"prompt_template": prompt_template_str}
+
+@app.get("/api/models")
+async def get_models():
+    models_path = "C:/Users/Tempest/Desktop/RAG/.models"
+    if not os.path.exists(models_path):
+        return {"error": "Models directory not found"}
+    
+    try:
+        files = [f for f in os.listdir(models_path) if f.endswith('.gguf')]
+        return {"models": files}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 # Configure the paths to your docs and FAISS index
 DOCS_PATH = "C:/Users/Tempest/Desktop/RAG/docs"
@@ -46,10 +101,6 @@ MACHINE_CONFIG = {
         "doc": f"{DOCS_PATH}/PDF/1-1cvjgdf_ys840di_errorcode_of_alarm_380500-deu.pdf",
         "index": f"{FAISS_INDEX_PATH}/yaskawa_alarm_380500.faiss"
     },
-    # "General Error Codes": {
-    #     "doc": f"{DOCS_PATH}/PDF/error-codes.pdf",
-    #     "index": f"{FAISS_INDEX_PATH}/general_error_codes.faiss"
-    # },
     "Fagor CNC 8055": {
         "doc": f"{DOCS_PATH}/PDF/Fagor-CNC-8055-Error-Solution-English.pdf",
         "index": f"{FAISS_INDEX_PATH}/fagor_cnc_8055.faiss"
@@ -64,121 +115,186 @@ MACHINE_CONFIG = {
     }
 }
 
-# Initialize the LLM
-llm = GoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    safety_settings={
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
-)
-
 # Initialize embeddings
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Load or create FAISS indexes
+def get_llm(model_config):
+    if model_config['type'] == 'local' and model_config.get('path'):
+        if not os.path.exists(model_config['path']):
+            raise ValueError(f"Local model path does not exist: {model_config['path']}")
+        return LlamaCpp(
+            model_path=model_config['path'],
+            n_gpu_layers=-1,
+            n_batch=512,
+            n_ctx=2048,
+            f16_kv=True,
+            verbose=True,
+        )
+    elif model_config['type'] == 'api':
+        provider = model_config.get('provider', 'google')
+        api_key = model_config.get('api_key')
+        
+        if provider == 'google':
+            if not api_key and not GEMINI_API_KEY:
+                raise ValueError("Google API key not provided")
+            return GoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                google_api_key=api_key or GEMINI_API_KEY,
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                },
+                # Additional parameters to reduce safety blocking
+                max_output_tokens=2048,
+                temperature=0.3,
+            )
+        elif provider == 'openai':
+            if not api_key:
+                raise ValueError("OpenAI API key not provided")
+            return ChatOpenAI(
+                model="gpt-4",
+                openai_api_key=api_key,
+                temperature=0.7
+            )
+        elif provider == 'claude':
+            if not api_key:
+                raise ValueError("Anthropic API key not provided")
+            return ChatAnthropic(
+                model="claude-3-sonnet-20240229",
+                anthropic_api_key=api_key,
+                temperature=0.7
+            )
+        else:
+            raise ValueError(f"Unsupported API provider: {provider}")
+    else:
+        raise ValueError(f"Unsupported model type: {model_config['type']}")
+
 if not os.path.exists(FAISS_INDEX_PATH):
     os.makedirs(FAISS_INDEX_PATH)
 
 for machine, config in MACHINE_CONFIG.items():
     if os.path.exists(config["index"]):
-        print(f"Loading existing FAISS index for {machine}")
-        config["db"] = FAISS.load_local(config["index"], embeddings, allow_dangerous_deserialization=True)
+        print(f"Loading existing Chroma index for {machine}")
+        config["db"] = Chroma(persist_directory=config["index"], embedding_function=embeddings)
     else:
-        print(f"Creating new FAISS index for {machine}")
+        print(f"Creating new Chroma index for {machine}")
         loader = PyMuPDFLoader(config["doc"])
         documents = loader.load()
-        # Custom splitting logic based on error codes
         full_text = "\n".join([doc.page_content for doc in documents])
-        
-        # This pattern splits the text at the beginning of each error code.
-        # It looks for a newline, followed by 3+ digits, optional space, and an opening quote.
-        pattern = r"(\n\d{3,}\s*[‘’'])"
-        
-        # Split the text by the pattern, keeping the delimiter.
+
+        pattern = r"\n(\d{3,})\s*[‘’']"
         split_text = re.split(pattern, full_text)
-        
-        texts = []
-        # The list alternates [header, delimiter, content, delimiter, content, ...].
-        # We combine each delimiter with the content that follows it.
+        texts_with_metadata = []
         if len(split_text) > 1:
             for i in range(1, len(split_text), 2):
-                # The delimiter is the error code prefix (e.g., "\n1066 ‘").
-                delimiter = split_text[i]
-                # The content is the description that follows.
-                content = split_text[i+1] if (i + 1) < len(split_text) else ""
-                
-                # Combine them and strip leading/trailing whitespace.
-                chunk_content = (delimiter + content).strip()
-                
-                # Clean the chunk content
-                chunk_content = re.sub(r"·M· Model Ref\. \d+", "", chunk_content)
-                chunk_content = re.sub(r"Error solution", "", chunk_content)
-                chunk_content = re.sub(r"CNC \d+ ·M·", "", chunk_content)
-                chunk_content = chunk_content.replace("", "")
-                chunk_content = re.sub(r'\s+', ' ', chunk_content).strip()
-                
-                if chunk_content:
-                    texts.append(Document(page_content=chunk_content))
-
-        if texts:
-            db = FAISS.from_documents(texts, embeddings)
-            db.save_local(config["index"])
+                error_code = split_text[i].strip()
+                content = split_text[i+1].strip() if (i + 1) < len(split_text) else ""
+                full_chunk_content = f"{error_code} ‘{content}"
+                full_chunk_content = re.sub(r"·M· Model Ref\\. \\d+", "", full_chunk_content)
+                full_chunk_content = re.sub(r"Error solution", "", full_chunk_content)
+                full_chunk_content = re.sub(r"CNC \\d+ ·M·", "", full_chunk_content)
+                full_chunk_content = full_chunk_content.replace("", "")
+                full_chunk_content = re.sub(r'\\s+', ' ', full_chunk_content).strip()
+                if full_chunk_content and error_code:
+                    metadata = {"error_code": error_code, "machine": machine}
+                    doc = Document(page_content=full_chunk_content, metadata=metadata)
+                    texts_with_metadata.append(doc)
+        if texts_with_metadata:
+            db = Chroma.from_documents(texts_with_metadata, embeddings, persist_directory=config["index"])
+            db.persist()
             config["db"] = db
         else:
             print(f"WARNING: No text chunks were created for {machine}. The index will be empty.")
             config["db"] = None
 
+async def stream_response(chain, user_query: str) -> AsyncIterator[str]:
+    try:
+        async for chunk in chain.astream(user_query):
+            yield chunk
+    except ValueError as e:
+        error_msg = str(e)
+        if "finish_reason" in error_msg:
+            if "1" in error_msg:  # finish_reason = 1 is STOP due to safety
+                yield "⚠️ Content was blocked by Google's safety filters. This may be due to technical terms in the manual being misinterpreted. The safety filters are set to BLOCK_NONE but Google may still block certain content. Try:\n1. Rephrasing your query\n2. Using a different model (OpenAI/Claude)\n3. Using a local model"
+            elif "2" in error_msg:  # finish_reason = 2 is MAX_TOKENS
+                yield "⚠️ Response was cut off due to length limits. Please try a more specific query."
+            else:
+                yield f"⚠️ Response generation was interrupted (finish_reason in error). Details: {error_msg}"
+        else:
+            yield f"❌ Error generating response: {error_msg}"
+    except Exception as e:
+        yield f"💥 An unexpected error occurred: {str(e)}"
+
 @app.post("/query")
 async def ask_query(query: Query):
+    try:
+        llm = get_llm(query.model_config)
+    except ValueError as e:
+        return {"error": str(e)}
+
     config = MACHINE_CONFIG.get(query.machine)
     if not config:
         return {"error": "Machine not found"}
 
-    # 1. Use the pre-loaded FAISS index
+
     db = config.get("db")
     if not db:
         return {"response": f"The document index for '{query.machine}' is empty. This likely means the PDF could not be processed correctly. Please check the document format."}
-    
-    retriever = db.as_retriever(search_kwargs={"k": 5})
 
-    # 2. Use MultiQueryRetriever
-    mq_retriever = MultiQueryRetriever.from_llm(
-        retriever=retriever, llm=llm
+    # 1. Define metadata fields for the SelfQueryRetriever
+    metadata_field_info = [
+        AttributeInfo(
+            name="error_code",
+            description="The numeric error code for a machine fault, like '1066' or '0079'.",
+            type="string",
+        ),
+        AttributeInfo(
+            name="machine",
+            description=f"The machine model the document is for, which is '{query.machine}'",
+            type="string",
+        ),
+    ]
+    document_content_description = "A description of a machine fault, its cause, and its solution."
+
+    # 2. Set up the SelfQueryRetriever
+    retriever = SelfQueryRetriever.from_llm(
+        llm,
+        db,
+        document_content_description,
+        metadata_field_info,
+        verbose=True,
+        search_kwargs={"k": 1}
     )
 
-    # 3. Define the prompt template
-    template = f"""
-    {query.system_prompt}
-    You will be given context from a machine's technical manual and an error code.
-    Structure your response in three distinct sections:
-    1. **Problem Description:** Briefly explain what the error code means based on the context.
-    2. **Probable Causes:** List the most likely reasons for this error from the context.
-    3. **Solution Steps:** Provide a clear, step-by-step guide to fix the issue using only information from the context.
-
-    **IMPORTANT:** Only use information from the context that is explicitly and exactly about the provided error code. Ignore any information related to other error codes, even if they are numerically similar. If the context does not contain specific information for the queried error code, state that the information is not available.
-
-    Context: {{context}}
-
-    Query: {{query}}
-
-    Answer:
-    Translate the final response to {query.language}.
-    """
-    prompt = PromptTemplate(template=template, input_variables=["context", "query"])
+    # 3. Define the prompt template using the global template
+    # The user-editable part is now the whole template.
+    # The 'system_prompt' from the query can still be used if you want to prepend it.
+    language_instruction = ""
+    if query.language == "ro":
+        language_instruction = "\nIMPORTANT: Respond ONLY in Romanian language."
+    elif query.language == "en":
+        language_instruction = "\nIMPORTANT: Respond ONLY in English language."
+    
+    final_template_str = f"{{system_prompt}}\n\n{prompt_template_str}{language_instruction}"
+    
+    prompt = PromptTemplate(
+        template=final_template_str,
+        input_variables=["system_prompt", "context", "query"]
+    )
 
     # 4. Create the processing chain
     chain = (
-        {"context": mq_retriever, "query": RunnablePassthrough()}
+        {
+            "context": retriever,
+            "query": RunnablePassthrough(),
+            "system_prompt": lambda x: query.system_prompt, # Pass the system prompt from the query
+        }
         | prompt
         | llm
         | StrOutputParser()
     )
 
-    # 5. Invoke the chain with the user's query
-    response = await chain.ainvoke(f"What is the meaning of error code {query.query}?")
-
-    # 6. Debugging: Print the retrieved context
-    retrieved_docs = await mq_retriever.ainvoke(f"What is the meaning of error code {query.query}?")
-    print("Retrieved Context:", "\n".join([doc.page_content for doc in retrieved_docs]))
-
-    return {"response": response}
+    # 5. Return a streaming response
+    return StreamingResponse(stream_response(chain, query.query), media_type="text/event-stream")

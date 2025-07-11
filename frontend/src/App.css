@@ -233,3 +233,97 @@
 .App.dark .machine-item:hover, .App.dark .setting-item:hover {
     background-color: #555;
 }
+
+.tab-buttons {
+    display: flex;
+    margin-bottom: 15px;
+}
+
+.tab-buttons button {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid #ccc;
+    background-color: #f0f0f0;
+    cursor: pointer;
+}
+
+.tab-buttons button.active {
+    background-color: #fff;
+    border-bottom-color: #fff;
+}
+
+.App.dark .tab-buttons button {
+    background-color: #333;
+    border-color: #555;
+}
+
+.App.dark .tab-buttons button.active {
+    background-color: #444;
+    border-bottom-color: #444;
+}
+
+.tab-content {
+    padding: 15px;
+    border: 1px solid #ccc;
+    border-top: none;
+}
+
+.App.dark .tab-content {
+    border-color: #555;
+}
+
+.api-key-input {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 10px;
+}
+
+.api-key-input label {
+    margin-bottom: 5px;
+}
+
+.api-key-input input {
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+.App.dark .api-key-input input {
+    background-color: #555;
+    color: #fff;
+    border-color: #666;
+}
+
+.local-model-list {
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid #ccc;
+    padding: 5px;
+    margin-top: 10px;
+}
+
+.local-model-item {
+    padding: 8px;
+    cursor: pointer;
+}
+
+.local-model-item:hover {
+    background-color: #f0f0f0;
+}
+
+.local-model-item.selected {
+    background-color: #007bff;
+    color: white;
+}
+
+.App.dark .local-model-list {
+    border-color: #555;
+}
+
+.App.dark .local-model-item:hover {
+    background-color: #555;
+}
+
+.App.dark .local-model-item.selected {
+    background-color: #007bff;
+}
