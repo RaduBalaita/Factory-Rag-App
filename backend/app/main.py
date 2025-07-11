@@ -18,6 +18,8 @@ from langchain.retrievers.self_query.base import SelfQueryRetriever
 from fastapi.responses import StreamingResponse
 from typing import AsyncIterator, Optional, Dict, Any
 from langchain_community.llms import LlamaCpp
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 
 # Set the API key
 load_dotenv()  # Load environment variables from .env
@@ -76,6 +78,19 @@ async def set_prompt_template(request: dict):
     prompt_template_str = request.get("prompt_template", DEFAULT_PROMPT_TEMPLATE)
     return {"prompt_template": prompt_template_str}
 
+@app.get("/api/models")
+async def get_models():
+    models_path = "C:/Users/Tempest/Desktop/RAG/.models"
+    if not os.path.exists(models_path):
+        return {"error": "Models directory not found"}
+    
+    try:
+        files = [f for f in os.listdir(models_path) if f.endswith('.gguf')]
+        return {"models": files}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # Configure the paths to your docs and FAISS index
 DOCS_PATH = "C:/Users/Tempest/Desktop/RAG/docs"
 FAISS_INDEX_PATH = "C:/Users/Tempest/Desktop/RAG/backend/faiss_index"
@@ -103,32 +118,58 @@ MACHINE_CONFIG = {
 # Initialize embeddings
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-def get_llm(model_config: ModelConfig):
-    if model_config.type == 'local' and model_config.path:
-        if os.path.exists(model_config.path):
-            return LlamaCpp(
-                model_path=model_config.path,
-                n_gpu_layers=-1, # Offload all layers to GPU
-                n_batch=512,
-                n_ctx=2048,
-                f16_kv=True,  # Must be True on new models
-                verbose=True,
+def get_llm(model_config):
+    if model_config['type'] == 'local' and model_config.get('path'):
+        if not os.path.exists(model_config['path']):
+            raise ValueError(f"Local model path does not exist: {model_config['path']}")
+        return LlamaCpp(
+            model_path=model_config['path'],
+            n_gpu_layers=-1,
+            n_batch=512,
+            n_ctx=2048,
+            f16_kv=True,
+            verbose=True,
+        )
+    elif model_config['type'] == 'api':
+        provider = model_config.get('provider', 'google')
+        api_key = model_config.get('api_key')
+        
+        if provider == 'google':
+            if not api_key and not GEMINI_API_KEY:
+                raise ValueError("Google API key not provided")
+            return GoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                google_api_key=api_key or GEMINI_API_KEY,
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                },
+                # Additional parameters to reduce safety blocking
+                max_output_tokens=2048,
+                temperature=0.3,
+            )
+        elif provider == 'openai':
+            if not api_key:
+                raise ValueError("OpenAI API key not provided")
+            return ChatOpenAI(
+                model="gpt-4",
+                openai_api_key=api_key,
+                temperature=0.7
+            )
+        elif provider == 'claude':
+            if not api_key:
+                raise ValueError("Anthropic API key not provided")
+            return ChatAnthropic(
+                model="claude-3-sonnet-20240229",
+                anthropic_api_key=api_key,
+                temperature=0.7
             )
         else:
-            raise ValueError(f"Local model path does not exist: {model_config.path}")
-    
-    # Default to Google Gemini
-    # Here you could add logic for other providers like OpenAI, Claude
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY environment variable not set")
-        
-    return GoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=GEMINI_API_KEY,
-        safety_settings={
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
-    )
+            raise ValueError(f"Unsupported API provider: {provider}")
+    else:
+        raise ValueError(f"Unsupported model type: {model_config['type']}")
 
 if not os.path.exists(FAISS_INDEX_PATH):
     os.makedirs(FAISS_INDEX_PATH)
@@ -169,8 +210,22 @@ for machine, config in MACHINE_CONFIG.items():
             config["db"] = None
 
 async def stream_response(chain, user_query: str) -> AsyncIterator[str]:
-    async for chunk in chain.astream(user_query):
-        yield chunk
+    try:
+        async for chunk in chain.astream(user_query):
+            yield chunk
+    except ValueError as e:
+        error_msg = str(e)
+        if "finish_reason" in error_msg:
+            if "1" in error_msg:  # finish_reason = 1 is STOP due to safety
+                yield "⚠️ Content was blocked by Google's safety filters. This may be due to technical terms in the manual being misinterpreted. The safety filters are set to BLOCK_NONE but Google may still block certain content. Try:\n1. Rephrasing your query\n2. Using a different model (OpenAI/Claude)\n3. Using a local model"
+            elif "2" in error_msg:  # finish_reason = 2 is MAX_TOKENS
+                yield "⚠️ Response was cut off due to length limits. Please try a more specific query."
+            else:
+                yield f"⚠️ Response generation was interrupted (finish_reason in error). Details: {error_msg}"
+        else:
+            yield f"❌ Error generating response: {error_msg}"
+    except Exception as e:
+        yield f"💥 An unexpected error occurred: {str(e)}"
 
 @app.post("/query")
 async def ask_query(query: Query):

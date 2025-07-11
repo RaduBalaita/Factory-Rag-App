@@ -293,3 +293,37 @@
     color: #fff;
     border-color: #666;
 }
+
+.local-model-list {
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid #ccc;
+    padding: 5px;
+    margin-top: 10px;
+}
+
+.local-model-item {
+    padding: 8px;
+    cursor: pointer;
+}
+
+.local-model-item:hover {
+    background-color: #f0f0f0;
+}
+
+.local-model-item.selected {
+    background-color: #007bff;
+    color: white;
+}
+
+.App.dark .local-model-list {
+    border-color: #555;
+}
+
+.App.dark .local-model-item:hover {
+    background-color: #555;
+}
+
+.App.dark .local-model-item.selected {
+    background-color: #007bff;
+}

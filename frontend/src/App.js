@@ -142,6 +142,7 @@ function App() {
                 setFontSize={setFontSize}
                 openSystemPrompt={() => setSystemPromptModalOpen(true)} 
                 openChangeModel={() => setChangeModelModalOpen(true)}
+                modelConfig={modelConfig}
             />
             <div className="main-content" onClick={handleContentClick}>
                 <div className="top-bar">

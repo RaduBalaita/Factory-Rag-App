@@ -49,7 +49,7 @@ const SortableItem = ({ id, children }) => {
     );
 };
 
-const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLanguage, openSystemPrompt, fontSize, setFontSize, openChangeModel }) => {
+const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLanguage, openSystemPrompt, fontSize, setFontSize, openChangeModel, modelConfig }) => {
     const [settingIds, setSettingIds] = useState(() => {
         // Temporarily force reset to initial settings
         return initialSettingIds;
@@ -78,7 +78,7 @@ const SettingsSidebar = ({ isOpen, onClose, theme, setTheme, language, setLangua
             case 'system-prompt':
                 return <div className="setting-item"><span style={{ color: 'red' }}>{t.systemPrompt}</span><button onClick={openSystemPrompt}>{t.edit}</button></div>;
             case 'change-model':
-                return <div className="setting-item"><span>{t.changeModel}</span><button onClick={openChangeModel}>{t.edit}</button></div>;
+                return <div className="setting-item"><span>{t.changeModel} ({modelConfig.type === 'local' ? 'Local' : `Cloud - ${modelConfig.provider}`})</span><button onClick={openChangeModel}>{t.edit}</button></div>;
             default:
                 return null;
         }
