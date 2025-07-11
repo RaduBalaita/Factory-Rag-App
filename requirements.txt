@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 python-dotenv
+python-multipart
 langchain
 langchain-community
 langchain_huggingface

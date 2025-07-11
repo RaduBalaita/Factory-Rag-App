@@ -327,3 +327,140 @@
 .App.dark .local-model-item.selected {
     background-color: #007bff;
 }
+
+/* Manage Documents Modal */
+.manage-documents-modal {
+    max-width: 600px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.upload-section {
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 20px;
+    margin-bottom: 20px;
+}
+
+.App.dark .upload-section {
+    border-bottom-color: #555;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.App.dark .form-group input {
+    background-color: #555;
+    border-color: #666;
+    color: #fff;
+}
+
+.file-name {
+    display: block;
+    margin-top: 5px;
+    font-style: italic;
+    color: #666;
+}
+
+.App.dark .file-name {
+    color: #aaa;
+}
+
+.upload-btn {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.upload-btn:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+.App.dark .upload-btn:disabled {
+    background-color: #555;
+}
+
+.documents-list {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.document-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+
+.App.dark .document-item {
+    border-color: #555;
+    background-color: #444;
+}
+
+.machine-name {
+    flex-grow: 1;
+    margin-right: 10px;
+}
+
+.delete-btn {
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.delete-btn:hover {
+    background-color: #c82333;
+}
+
+.message {
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.message.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.message.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.App.dark .message.success {
+    background-color: #2d5a3d;
+    color: #a3d3a3;
+    border-color: #4d7c5d;
+}
+
+.App.dark .message.error {
+    background-color: #5a2d2d;
+    color: #d3a3a3;
+    border-color: #7c4d4d;
+}

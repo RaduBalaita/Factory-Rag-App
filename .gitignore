@@ -2,6 +2,9 @@
 .venv/
 .models/
 .env
+__pycache__/
+*.pyc
+backend/faiss_index/
 
 # Frontend ignores
 frontend/node_modules/

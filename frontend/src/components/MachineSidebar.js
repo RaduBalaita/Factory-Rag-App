@@ -27,17 +27,34 @@ const SortableItem = ({ id, children }) => {
 };
 
 const MachineSidebar = ({ isOpen, onClose, setMachine }) => {
-    const [machines, setMachines] = useState(() => {
-        const savedMachines = localStorage.getItem('machines');
-        if (savedMachines) {
-            return JSON.parse(savedMachines);
-        }
-        return initialMachines;
-    });
+    const [machines, setMachines] = useState([]);
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        localStorage.setItem('machines', JSON.stringify(machines));
-    }, [machines]);
+        const fetchMachines = async () => {
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/machines');
+                const data = await response.json();
+                if (data.machines) {
+                    const machineList = data.machines.map((name, index) => ({
+                        id: `machine-${index}`,
+                        name: name
+                    }));
+                    setMachines(machineList);
+                }
+            } catch (error) {
+                console.error('Failed to fetch machines:', error);
+                // Fallback to initial machines if fetch fails
+                setMachines(initialMachines);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (isOpen) {
+            fetchMachines();
+        }
+    }, [isOpen]);
 
     const sensors = useSensors(
         useSensor(PointerSensor, {

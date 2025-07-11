@@ -6,6 +6,7 @@ import MachineSidebar from './components/MachineSidebar';
 import SettingsSidebar from './components/SettingsSidebar';
 import SystemPromptModal from './components/SystemPromptModal';
 import ChangeModelModal from './components/ChangeModelModal';
+import ManageDocumentsModal from './components/ManageDocumentsModal';
 
 const translations = {
     en: {
@@ -21,6 +22,7 @@ function App() {
     const [isSettingsSidebarOpen, setSettingsSidebarOpen] = useState(false);
     const [isSystemPromptModalOpen, setSystemPromptModalOpen] = useState(false);
     const [isChangeModelModalOpen, setChangeModelModalOpen] = useState(false);
+    const [isManageDocumentsModalOpen, setManageDocumentsModalOpen] = useState(false);
 
     const [machine, setMachine] = useState(() => localStorage.getItem('machine') || 'Yaskawa Alarm 380500');
     const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
@@ -113,6 +115,7 @@ function App() {
         if (isSettingsSidebarOpen) setSettingsSidebarOpen(false);
         if (isSystemPromptModalOpen) setSystemPromptModalOpen(false);
         if (isChangeModelModalOpen) setChangeModelModalOpen(false);
+        if (isManageDocumentsModalOpen) setManageDocumentsModalOpen(false);
     };
 
     const handlePromptTemplateSave = async () => {
@@ -142,6 +145,7 @@ function App() {
                 setFontSize={setFontSize}
                 openSystemPrompt={() => setSystemPromptModalOpen(true)} 
                 openChangeModel={() => setChangeModelModalOpen(true)}
+                openManageDocuments={() => setManageDocumentsModalOpen(true)}
                 modelConfig={modelConfig}
             />
             <div className="main-content" onClick={handleContentClick}>
@@ -166,6 +170,15 @@ function App() {
                 language={language}
                 modelConfig={modelConfig}
                 setModelConfig={setModelConfig}
+            />
+            <ManageDocumentsModal
+                isOpen={isManageDocumentsModalOpen}
+                onClose={() => setManageDocumentsModalOpen(false)}
+                language={language}
+                onDocumentChange={() => {
+                    // Trigger a refresh of the machine list in MachineSidebar
+                    // This could be improved with a more sophisticated state management
+                }}
             />
         </div>
     );
