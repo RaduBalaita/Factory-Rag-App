@@ -3,14 +3,6 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from 
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-const initialMachines = [
-    { id: 'yaskawa', name: 'Yaskawa Alarm 380500' },
-    { id: 'general', name: 'General Error Codes' },
-    { id: 'fagor', name: 'Fagor CNC 8055' },
-    { id: 'fc-gtr', name: 'FC-GTR V2.1' },
-    { id: 'num-cnc', name: 'NUM CNC' },
-];
-
 const SortableItem = ({ id, children }) => {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id });
 
@@ -32,6 +24,7 @@ const MachineSidebar = ({ isOpen, onClose, setMachine }) => {
 
     useEffect(() => {
         const fetchMachines = async () => {
+            setLoading(true);
             try {
                 const response = await fetch('http://127.0.0.1:8000/api/machines');
                 const data = await response.json();
@@ -41,11 +34,12 @@ const MachineSidebar = ({ isOpen, onClose, setMachine }) => {
                         name: name
                     }));
                     setMachines(machineList);
+                } else {
+                    setMachines([]);
                 }
             } catch (error) {
                 console.error('Failed to fetch machines:', error);
-                // Fallback to initial machines if fetch fails
-                setMachines(initialMachines);
+                setMachines([]);
             } finally {
                 setLoading(false);
             }
@@ -85,7 +79,7 @@ const MachineSidebar = ({ isOpen, onClose, setMachine }) => {
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                 <SortableContext items={machines} strategy={verticalListSortingStrategy}>
                     <div className="sidebar-content">
-                        {machines.map(machine => (
+                        {loading ? <p>Loading...</p> : machines.map(machine => (
                             <SortableItem key={machine.id} id={machine.id}>
                                 <div className="machine-item" onClick={() => setMachine(machine.name)}>
                                     {machine.name}

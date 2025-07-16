@@ -22,6 +22,8 @@ from typing import AsyncIterator, Optional, Dict, Any
 from langchain_community.llms import LlamaCpp
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
+import gc
+import psutil
 
 # Set the API key
 load_dotenv()  # Load environment variables from .env
@@ -61,14 +63,18 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), "..", "machines_config.jso
 # Initialize embeddings
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-class QueryRequest(BaseModel):
-    query: str
-    machine: str
-
 class ModelConfig(BaseModel):
     type: str
     provider: Optional[str] = None
     path: Optional[str] = None
+    api_key: Optional[str] = None
+
+class QueryRequest(BaseModel):
+    query: str
+    machine: str
+    model_settings: ModelConfig
+    language: Optional[str] = None
+    system_prompt: Optional[str] = None
 
 class PromptTemplateRequest(BaseModel):
     template: str
@@ -157,44 +163,163 @@ async def delete_machine_document(machine_name: str):
         config = MACHINE_CONFIG[target_name]
         print(f"Machine config: {config}")
         
-        # Close the database connection first if it exists
-        if "db" in config and config["db"] is not None:
+        # Clear the database object from memory to release file handles
+        if "db" in config and config.get("db"):
             try:
-                # Try to close the Chroma connection
-                if hasattr(config["db"], '_client'):
-                    config["db"]._client.reset()
-                config["db"] = None
-                print("Closed database connection")
+                # More thorough cleanup for Chroma database
+                db = config["db"]
+                
+                # Try to close any active connections
+                if hasattr(db, '_client') and db._client:
+                    try:
+                        db._client.reset()
+                    except Exception:
+                        pass
+                    db._client = None
+                
+                if hasattr(db, '_collection') and db._collection:
+                    db._collection = None
+                
+                # Delete the entire object
+                del db
+                
             except Exception as e:
-                print(f"Error closing database: {e}")
+                print(f"Error during database cleanup: {e}")
+            
+            config["db"] = None
+            
+            # Force garbage collection multiple times
+            for _ in range(3):
+                gc.collect()
+            
+            print("Cleared database object from memory")
+        
+        # Also clean up any other references in the global config
+        for machine_name, machine_config in MACHINE_CONFIG.items():
+            if machine_name != target_name and machine_config.get("index") == config.get("index"):
+                machine_config["db"] = None
         
         # Delete document file
         if "doc" in config and os.path.exists(config["doc"]):
             os.remove(config["doc"])
             print(f"Deleted document file: {config['doc']}")
         
-        # Delete index directory
+        # Delete index directory with Windows file handle management
         if "index" in config and os.path.exists(config["index"]):
             import time
-            # Wait a moment for file handles to be released
-            time.sleep(1)
+            import stat
+            import psutil
+            import sys
+            
+            def remove_readonly(func, path, _):
+                """Clear the readonly bit and reattempt the removal"""
+                try:
+                    os.chmod(path, stat.S_IWRITE)
+                    func(path)
+                except Exception:
+                    pass
+            
+            def close_file_handles(directory_path):
+                """Close file handles that might be locking the directory"""
+                try:
+                    current_process = psutil.Process()
+                    for proc in psutil.process_iter(['pid', 'name', 'open_files']):
+                        try:
+                            if proc.info['open_files']:
+                                for file_info in proc.info['open_files']:
+                                    if directory_path.lower() in file_info.path.lower():
+                                        print(f"Found process {proc.info['name']} (PID: {proc.info['pid']}) holding file: {file_info.path}")
+                                        if proc.info['pid'] != current_process.pid:
+                                            proc.terminate()
+                                            proc.wait(timeout=3)
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                            pass
+                except Exception as e:
+                    print(f"Could not close file handles: {e}")
+            
+            # Wait for file handles to be released
+            time.sleep(3)
+            
             try:
-                shutil.rmtree(config["index"])
+                shutil.rmtree(config["index"], onerror=remove_readonly)
                 print(f"Deleted index directory: {config['index']}")
             except Exception as e:
                 print(f"Error deleting index directory: {e}")
-                # Try to delete individual files if directory deletion fails
+                
+                # Try to close any file handles holding the directory
+                close_file_handles(config["index"])
+                time.sleep(2)
+                
+                # Try again after closing handles
                 try:
-                    for root, dirs, files in os.walk(config["index"]):
-                        for file in files:
-                            try:
-                                os.remove(os.path.join(root, file))
-                            except Exception:
-                                pass
-                    shutil.rmtree(config["index"])
-                    print(f"Successfully deleted index directory on second attempt")
+                    shutil.rmtree(config["index"], onerror=remove_readonly)
+                    print(f"Successfully deleted index directory after closing handles")
                 except Exception as e2:
-                    print(f"Could not delete index directory: {e2}")
+                    print(f"Still couldn't delete after closing handles: {e2}")
+                    
+                    # Final attempt: delete files one by one with aggressive retries
+                    deleted_successfully = True
+                    try:
+                        for root, dirs, files in os.walk(config["index"], topdown=False):
+                            # Delete all files in this directory
+                            for file in files:
+                                filepath = os.path.join(root, file)
+                                for attempt in range(10):  # More attempts
+                                    try:
+                                        # Make file writable and delete
+                                        if os.path.exists(filepath):
+                                            os.chmod(filepath, stat.S_IWRITE)
+                                            os.remove(filepath)
+                                            break
+                                    except Exception as file_error:
+                                        if attempt == 9:  # Last attempt
+                                            print(f"Failed to delete file {filepath}: {file_error}")
+                                            deleted_successfully = False
+                                        time.sleep(0.5)  # Short wait between attempts
+                            
+                            # Delete empty directories
+                            for dir in dirs:
+                                dirpath = os.path.join(root, dir)
+                                for attempt in range(5):
+                                    try:
+                                        if os.path.exists(dirpath):
+                                            os.rmdir(dirpath)
+                                            break
+                                    except Exception:
+                                        if attempt == 4:
+                                            deleted_successfully = False
+                                        time.sleep(0.5)
+                        
+                        # Finally, try to delete the root directory
+                        for attempt in range(5):
+                            try:
+                                if os.path.exists(config["index"]):
+                                    os.rmdir(config["index"])
+                                    print(f"Successfully deleted index directory after manual cleanup")
+                                    break
+                            except Exception:
+                                if attempt == 4:
+                                    deleted_successfully = False
+                                time.sleep(1)
+                        
+                        if not deleted_successfully:
+                            raise Exception("Could not delete all files/directories")
+                            
+                    except Exception as e3:
+                        print(f"Manual cleanup failed: {e3}")
+                        # As last resort, just mark it for cleanup and continue
+                        try:
+                            import uuid
+                            from datetime import datetime
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            temp_name = f"{config['index']}_CLEANUP_NEEDED_{timestamp}"
+                            if os.path.exists(config["index"]):
+                                os.rename(config["index"], temp_name)
+                                print(f"❌ Could not delete directory. Renamed to: {temp_name}")
+                                print("⚠️  Please manually delete this directory when convenient")
+                        except Exception as e4:
+                            print(f"❌ Complete cleanup failure. Directory may need manual deletion: {config['index']}")
+                            print(f"Error: {e4}")
         
         # Remove from config
         del MACHINE_CONFIG[target_name]
@@ -230,44 +355,10 @@ def load_machine_config():
             print(f"Error loading config: {e}")
             return {}
     else:
-        # Create default configuration if file doesn't exist
-        # Only add machines for files that actually exist
-        default_config = {}
-        
-        # Check for available PDF files and create default configs
-        pdf_dir = os.path.join(DOCS_PATH, "PDF")
-        if os.path.exists(pdf_dir):
-            for filename in os.listdir(pdf_dir):
-                if filename.endswith('.pdf'):
-                    # Create better machine names from filenames
-                    base_name = filename.replace('.pdf', '')
-                    
-                    # Handle specific known files
-                    if 'fagor' in base_name.lower() and '8055' in base_name:
-                        machine_name = "Fagor CNC 8055"
-                    elif 'yaskawa' in base_name.lower() or '380500' in base_name:
-                        machine_name = "Yaskawa Alarm 380500"
-                    elif 'fc-gtr' in base_name.lower() or 'fc_gtr' in base_name.lower():
-                        machine_name = "FC-GTR V2.1"
-                    elif 'num' in base_name.lower() and 'cnc' in base_name.lower():
-                        machine_name = "NUM CNC"
-                    else:
-                        # Generic cleanup for other files
-                        machine_name = base_name.replace('-', ' ').replace('_', ' ')
-                        machine_name = ' '.join(word.capitalize() for word in machine_name.split())
-                    
-                    doc_path = os.path.join(pdf_dir, filename)
-                    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', base_name.lower())
-                    index_path = os.path.join(FAISS_INDEX_PATH, f"{safe_name}.faiss")
-                    
-                    default_config[machine_name] = {
-                        "doc": doc_path,
-                        "index": index_path
-                    }
-                    
-        # Save default config
-        save_machine_config(default_config)
-        return default_config
+        # Return empty configuration if file doesn't exist
+        # Machines should only be added through the API upload endpoint
+        print("No machine configuration file found. Starting with empty configuration.")
+        return {}
 
 def save_machine_config(config):
     """Save machine configuration to JSON file"""
@@ -289,6 +380,8 @@ def save_machine_config(config):
 # Load machine configuration
 MACHINE_CONFIG = load_machine_config()
 
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 async def create_index_for_machine(machine_name: str, config: dict):
     """Create vector index for a machine document"""
     try:
@@ -309,106 +402,51 @@ async def create_index_for_machine(machine_name: str, config: dict):
             print(f"ERROR: No documents loaded from {config['doc']}")
             config["db"] = None
             return
-            
-        full_text = "\n".join([doc.page_content for doc in documents])
-        print(f"Full text length: {len(full_text)} characters")
-        print(f"First 200 characters: {full_text[:200]}")
 
-        # Use a more comprehensive approach to extract error codes
-        # Pattern to find error codes like "1083 'Range exceeded'" 
-        error_pattern = r"(\d{3,})\s+'([^']+)'"
-        error_matches = list(re.finditer(error_pattern, full_text))
+        # Use the better chunking strategy from mainold.py for error code documents
+        full_text = "\n".join([doc.page_content for doc in documents])
         
-        print(f"Found {len(error_matches)} error code matches with basic pattern")
-        
+        # Pattern to split by error codes (3+ digits followed by quotes)
+        # Updated to handle different quote characters including curly quotes
+        pattern = r"\n(\d{3,})\s*['''\"\u2018\u2019\u201C\u201D]"
+        split_text = re.split(pattern, full_text)
         texts_with_metadata = []
         
-        if error_matches:
-            print(f"Processing {len(error_matches)} error codes")
-            for match in error_matches:
-                error_code = match.group(1).strip()
-                error_title = match.group(2).strip()
-                
-                # Find the full content for this error code
-                start_pos = match.start()
-                
-                # Look for the next error code to know where this one ends
-                next_error = None
-                for next_match in error_matches:
-                    if next_match.start() > start_pos:
-                        next_error = next_match
-                        break
-                
-                if next_error:
-                    end_pos = next_error.start()
-                    full_content = full_text[start_pos:end_pos].strip()
-                else:
-                    # This is the last error code, take rest of the text (but limit it)
-                    full_content = full_text[start_pos:start_pos+2000].strip()
-                
-                # Clean up the content
-                full_content = re.sub(r"·M· Model Ref\\. \\d+", "", full_content)
-                full_content = re.sub(r"Error solution", "", full_content)
-                full_content = re.sub(r"CNC \\d+ ·M·", "", full_content)
-                full_content = full_content.replace("", "")
-                full_content = re.sub(r'\s+', ' ', full_content).strip()
-                
-                if full_content and error_code:
-                    metadata = {"error_code": error_code, "machine": machine_name}
-                    doc = Document(page_content=full_content, metadata=metadata)
-                    texts_with_metadata.append(doc)
+        print(f"Split text into {len(split_text)} parts")
+        
+        if len(split_text) > 1:
+            # Debug: let's see what we get
+            for i in range(1, len(split_text), 2):
+                if i < len(split_text):
+                    error_code = split_text[i].strip()
+                    content = split_text[i+1].strip() if (i + 1) < len(split_text) else ""
                     
-                    # Debug: print first few error codes to verify
-                    if len(texts_with_metadata) <= 5:
-                        print(f"Indexed error {error_code}: '{error_title}' - {full_content[:100]}...")
-        else:
-            # If no error code pattern, try different patterns or chunk by pages
-            print("No error code pattern found, trying alternative approaches...")
-            
-            # Try to find error codes with different patterns
-            error_patterns = [
-                r"(\d{3,})\s*[:\-\s]",  # Error codes followed by : or -
-                r"Error\s+(\d{3,})",     # "Error" followed by number
-                r"Alarm\s+(\d{3,})",     # "Alarm" followed by number
-            ]
-            
-            found_errors = False
-            for pattern in error_patterns:
-                matches = re.finditer(pattern, full_text, re.IGNORECASE)
-                error_chunks = []
-                
-                for match in matches:
-                    error_code = match.group(1)
-                    start_pos = match.start()
-                    # Get surrounding context (500 chars before and after)
-                    context_start = max(0, start_pos - 500)
-                    context_end = min(len(full_text), start_pos + 1500)
-                    context = full_text[context_start:context_end].strip()
+                    if error_code == "1083":
+                        print(f"DEBUG: Found 1083 at index {i}, content starts with: {content[:100]}")
                     
-                    if len(context) > 50:  # Only add if we have substantial content
+                    full_chunk_content = f"{error_code} '{content}"
+                    
+                    # Clean up the content exactly like mainold.py
+                    full_chunk_content = re.sub(r"·M· Model Ref\\. \\d+", "", full_chunk_content)
+                    full_chunk_content = re.sub(r"Error solution", "", full_chunk_content)
+                    full_chunk_content = re.sub(r"CNC \\d+ ·M·", "", full_chunk_content)
+                    full_chunk_content = full_chunk_content.replace("", "")
+                    full_chunk_content = re.sub(r'\\s+', ' ', full_chunk_content).strip()
+                    
+                    if full_chunk_content and error_code:
                         metadata = {"error_code": error_code, "machine": machine_name}
-                        doc = Document(page_content=context, metadata=metadata)
-                        error_chunks.append(doc)
-                
-                if error_chunks:
-                    print(f"Found {len(error_chunks)} errors using pattern: {pattern}")
-                    texts_with_metadata.extend(error_chunks)
-                    found_errors = True
-                    break
+                        doc = Document(page_content=full_chunk_content, metadata=metadata)
+                        texts_with_metadata.append(doc)
+        else:
+            # Fallback to regular chunking if no error codes found
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
+            texts_with_metadata = text_splitter.split_documents(documents)
             
-            # If still no luck, chunk by pages
-            if not found_errors:
-                print("No error patterns found, chunking by pages")
-                for i, doc in enumerate(documents):
-                    if doc.page_content.strip() and len(doc.page_content.strip()) > 100:
-                        metadata = {"page": i+1, "machine": machine_name}
-                        texts_with_metadata.append(Document(page_content=doc.page_content.strip(), metadata=metadata))
-                    
         print(f"Created {len(texts_with_metadata)} text chunks")
         
         if texts_with_metadata:
             db = Chroma.from_documents(texts_with_metadata, embeddings, persist_directory=config["index"])
-            # Note: Chroma 0.4.x automatically persists, no need to call persist()
+            db.persist()  # Add persist() call like in mainold.py
             config["db"] = db
             print(f"Successfully created index for {machine_name} with {len(texts_with_metadata)} chunks")
         else:
@@ -428,14 +466,15 @@ def get_llm(model_config):
             model_path=model_config['path'],
             n_gpu_layers=-1,
             n_batch=512,
-            n_ctx=2048,
+            n_ctx=3072,  # Reduced from 4096 to prevent context issues
             f16_kv=True,
-            verbose=True,
+            verbose=False,
         )
     elif model_config['type'] == 'api':
         provider = model_config.get('provider', 'google').lower()
         if provider == 'google':
-            api_key = os.getenv("GEMINI_API_KEY")
+            # Use API key from model config or fallback to environment
+            api_key = model_config.get('api_key') or os.getenv("GEMINI_API_KEY")
             if not api_key:
                 raise ValueError("Google API key not provided")
             return GoogleGenerativeAI(
@@ -450,7 +489,8 @@ def get_llm(model_config):
                 }
             )
         elif provider == 'openai':
-            api_key = os.getenv("OPENAI_API_KEY")
+            # Use API key from model config or fallback to environment
+            api_key = model_config.get('api_key') or os.getenv("OPENAI_API_KEY")
             if not api_key:
                 raise ValueError("OpenAI API key not provided")
             return ChatOpenAI(
@@ -459,7 +499,8 @@ def get_llm(model_config):
                 temperature=0.7
             )
         elif provider == 'anthropic':
-            api_key = os.getenv("ANTHROPIC_API_KEY")
+            # Use API key from model config or fallback to environment
+            api_key = model_config.get('api_key') or os.getenv("ANTHROPIC_API_KEY")
             if not api_key:
                 raise ValueError("Anthropic API key not provided")
             return ChatAnthropic(
@@ -481,146 +522,52 @@ for machine, config in MACHINE_CONFIG.items():
         config["db"] = Chroma(persist_directory=config["index"], embedding_function=embeddings)
     else:
         print(f"Creating new Chroma index for {machine}")
+        # Use the async function we already created
+        import asyncio
         try:
-            if not os.path.exists(config["doc"]):
-                print(f"WARNING: Document not found for {machine}: {config['doc']}")
-                config["db"] = None
-                continue
-                
-            loader = PyMuPDFLoader(config["doc"])
-            documents = loader.load()
-            full_text = "\n".join([doc.page_content for doc in documents])
-
-            # Try multiple patterns to extract error codes  
-            error_code_patterns = [
-                r"\n(\d{3,})\s*[''']",  # Original pattern: error codes followed by quotes
-                r"(\d{3,})\s+'[^']*'",  # Pattern: error codes followed by quoted text
-                r"(\d{3,})\s+'[^']*'\s*\n",  # Pattern: error codes with quotes and newline
-            ]
-            
-            texts_with_metadata = []
-            best_pattern = None
-            best_split = []
-            
-            # Try each pattern and use the one that finds the most error codes
-            for pattern in error_code_patterns:
-                split_text = re.split(pattern, full_text)
-                if len(split_text) > len(best_split):
-                    best_pattern = pattern
-                    best_split = split_text
-            
-            print(f"Best pattern '{best_pattern}' split text into {len(best_split)} parts")
-            
-            # Try to extract error codes with their descriptions using the best pattern
-            if len(best_split) > 1:
-                print(f"Found error code pattern, processing {(len(best_split)-1)//2} error codes")
-                for i in range(1, len(best_split), 2):
-                    error_code = best_split[i].strip()
-                    content = best_split[i+1].strip() if (i + 1) < len(best_split) else ""
-                    
-                    # Look for the specific error in the full text around this error code
-                    error_search = rf"(\d{{3,}})\s+'{re.escape(error_code)}[^']*'.*?(?=\d{{3,}}\s+'|$)"
-                    error_match = re.search(error_search, full_text, re.DOTALL)
-                    
-                    if error_match:
-                        full_chunk_content = error_match.group(0).strip()
-                    else:
-                        # Fallback to the split method
-                        full_chunk_content = f"{error_code} '{content}"
-                    
-                    # Clean up the content
-                    full_chunk_content = re.sub(r"·M· Model Ref\\. \\d+", "", full_chunk_content)
-                    full_chunk_content = re.sub(r"Error solution", "", full_chunk_content)
-                    full_chunk_content = re.sub(r"CNC \\d+ ·M·", "", full_chunk_content)
-                    full_chunk_content = full_chunk_content.replace("", "")
-                    full_chunk_content = re.sub(r'\s+', ' ', full_chunk_content).strip()
-                    
-                    if full_chunk_content and error_code:
-                        metadata = {"error_code": error_code, "machine": machine}
-                        doc = Document(page_content=full_chunk_content, metadata=metadata)
-                        texts_with_metadata.append(doc)
-            else:
-                # If no error code pattern, try different patterns or chunk by pages
-                print("No error code pattern found, trying alternative approaches...")
-                
-                # Try to find error codes with different patterns
-                error_patterns = [
-                    r"(\d{3,})\s*[:\-\s]",  # Error codes followed by : or -
-                    r"Error\s+(\d{3,})",     # "Error" followed by number
-                    r"Alarm\s+(\d{3,})",     # "Alarm" followed by number
-                ]
-                
-                found_errors = False
-                for pattern in error_patterns:
-                    matches = re.finditer(pattern, full_text, re.IGNORECASE)
-                    error_chunks = []
-                    
-                    for match in matches:
-                        error_code = match.group(1)
-                        start_pos = match.start()
-                        # Get surrounding context (500 chars before and after)
-                        context_start = max(0, start_pos - 500)
-                        context_end = min(len(full_text), start_pos + 1500)
-                        context = full_text[context_start:context_end].strip()
-                        
-                        if len(context) > 50:  # Only add if we have substantial content
-                            metadata = {"error_code": error_code, "machine": machine}
-                            doc = Document(page_content=context, metadata=metadata)
-                            error_chunks.append(doc)
-                    
-                    if error_chunks:
-                        print(f"Found {len(error_chunks)} errors using pattern: {pattern}")
-                        texts_with_metadata.extend(error_chunks)
-                        found_errors = True
-                        break
-                
-                # If still no luck, chunk by pages
-                if not found_errors:
-                    print("No error patterns found, chunking by pages")
-                    for i, doc in enumerate(documents):
-                        if doc.page_content.strip() and len(doc.page_content.strip()) > 100:
-                            metadata = {"page": i+1, "machine": machine}
-                            texts_with_metadata.append(Document(page_content=doc.page_content.strip(), metadata=metadata))
-            if texts_with_metadata:
-                db = Chroma.from_documents(texts_with_metadata, embeddings, persist_directory=config["index"])
-                config["db"] = db
-                print(f"Successfully created index for {machine} with {len(texts_with_metadata)} chunks")
-            else:
-                print(f"WARNING: No text chunks were created for {machine}. The index will be empty.")
-                config["db"] = None
+            # Run the async function synchronously during startup
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(create_index_for_machine(machine, config))
+            loop.close()
         except Exception as e:
             print(f"Error creating index for {machine}: {str(e)}")
             config["db"] = None
 
-async def stream_response_with_fallback(retriever, user_query: str, prompt_template: str) -> AsyncIterator[str]:
+async def stream_response_with_fallback(retriever, user_query: str, prompt_template: str, model_config: Dict[str, Any]) -> AsyncIterator[str]:
     """Stream response with automatic fallback to different LLM providers on failure"""
     
     # Define fallback order: try current model first, then fallback providers
-    current_provider = os.getenv("MODEL_PROVIDER", "google")
-    current_type = os.getenv("MODEL_TYPE", "api")
-    current_path = os.getenv("MODEL_PATH")
+    current_type = model_config.get("type", "api")
     
-    # Define fallback chain
+    # Fix provider detection for local models
     if current_type == "local":
-        fallback_providers = ["google", "openai", "anthropic"]  # If local fails, try API providers
+        current_provider = "local"
     else:
-        # If current API provider fails, try other API providers, then local
-        all_api_providers = ["google", "openai", "anthropic"]
-        fallback_providers = [p for p in all_api_providers if p != current_provider]
+        current_provider = model_config.get("provider", "google")
+    
+    # Define fallback chain with LOCAL MODELS AS PREFERRED FALLBACK
+    local_models_dir = os.path.join(os.path.dirname(__file__), "..", "..", ".models")
+    local_available = os.path.exists(local_models_dir) and os.listdir(local_models_dir)
+    
+    if current_type == "local":
+        # If current model is local, fallback to API providers
+        fallback_providers = ["google", "openai", "anthropic"]
+    else:
+        # If current model is API, prioritize LOCAL as first fallback for privacy/cost benefits
+        fallback_providers = []
         
-        # Add local as last resort if available
-        local_models_dir = os.path.join(os.getcwd(), ".models")
-        if os.path.exists(local_models_dir) and os.listdir(local_models_dir):
+        # Add local as FIRST fallback if available
+        if local_available:
             fallback_providers.append("local")
+        
+        # Then add other API providers as secondary fallbacks
+        all_api_providers = ["google", "openai", "anthropic"]
+        fallback_providers.extend([p for p in all_api_providers if p != current_provider])
     
     # Try current model first
     try:
-        current_model_config = {
-            "type": current_type,
-            "provider": current_provider,
-            "path": current_path
-        }
-        llm = get_llm(current_model_config)
+        llm = get_llm(model_config)
         if llm:
             chain = create_chain(retriever, prompt_template, llm)
             yield f"🤖 Using {current_provider} model...\n\n"
@@ -647,7 +594,7 @@ async def stream_response_with_fallback(retriever, user_query: str, prompt_templ
             # Create model config for fallback provider
             if provider == "local":
                 # Use the first available local model
-                local_models_dir = os.path.join(os.getcwd(), ".models")
+                local_models_dir = os.path.join(os.path.dirname(__file__), "..", "..", ".models")
                 if os.path.exists(local_models_dir):
                     model_files = [f for f in os.listdir(local_models_dir) if f.endswith('.gguf')]
                     if model_files:
@@ -666,7 +613,11 @@ async def stream_response_with_fallback(retriever, user_query: str, prompt_templ
                 fallback_config = {
                     "type": "api",
                     "provider": provider,
-                    "path": None
+                    "path": None,
+                    "api_key": os.getenv("GEMINI_API_KEY") if provider == "google" else (
+                        os.getenv("OPENAI_API_KEY") if provider == "openai" else 
+                        os.getenv("ANTHROPIC_API_KEY") if provider == "anthropic" else None
+                    )
                 }
             
             llm = get_llm(fallback_config)
@@ -689,6 +640,7 @@ async def stream_response_with_fallback(retriever, user_query: str, prompt_templ
     
     # If all providers failed
     yield "\n❌ All LLM providers failed. Please check your API keys and try again."
+
 
 def create_chain(retriever, prompt_template: str, llm):
     """Create a processing chain with the given retriever, prompt template, and LLM"""
@@ -733,12 +685,7 @@ async def query_documents(query: QueryRequest):
     try:
         print(f"Query received: '{query.query}' for machine: '{query.machine}'")
         
-        # Get the current model configuration from environment
-        model_config = {
-            "type": os.getenv("MODEL_TYPE", "api"),
-            "provider": os.getenv("MODEL_PROVIDER", "google"),
-            "path": os.getenv("MODEL_PATH")
-        }
+        model_config = query.model_settings.dict()
         print(f"Model config: {model_config}")
         
         config = MACHINE_CONFIG.get(query.machine)
@@ -757,117 +704,53 @@ async def query_documents(query: QueryRequest):
         
         print("Database loaded successfully")
         
-        # Get LLM for SelfQueryRetriever (we'll handle fallbacks in the response generation)
+        # Create SelfQueryRetriever like in mainold.py for better error code retrieval
+        # Use it for BOTH local and API models since it's designed for exact error code matching
         try:
-            model_config = {
-                "type": os.getenv("MODEL_TYPE", "api"),
-                "provider": os.getenv("MODEL_PROVIDER", "google"),
-                "path": os.getenv("MODEL_PATH")
-            }
-            llm = get_llm(model_config)
-        except Exception as e:
-            print(f"Failed to create primary LLM for SelfQueryRetriever: {e}")
-            # Use Google as fallback for SelfQueryRetriever if primary fails
-            try:
-                fallback_config = {"type": "api", "provider": "google", "path": None}
-                llm = get_llm(fallback_config)
-                print("Using Google LLM as fallback for SelfQueryRetriever")
-            except Exception as e2:
-                print(f"Fallback LLM also failed: {e2}")
-                raise HTTPException(status_code=500, detail="No LLM available for query processing")
-        
-        # Define metadata fields for the SelfQueryRetriever
-        metadata_field_info = [
-            AttributeInfo(
-                name="error_code",
-                description="The numeric error code for a machine fault, like '1066' or '0079'.",
-                type="string",
-            ),
-            AttributeInfo(
-                name="machine",
-                description=f"The machine model the document is for, which is '{query.machine}'",
-                type="string",
-            ),
-        ]
-        document_content_description = "A description of a machine fault, its cause, and its solution."
-
-        # Set up the retriever - use similarity search for simple error codes, SelfQueryRetriever for complex queries
-        use_self_query = False
-        
-        # Check if this is a simple error code query (just numbers)
-        if not re.match(r'^\d+$', query.query.strip()):
-            # Complex query - try SelfQueryRetriever
-            try:
-                retriever = SelfQueryRetriever.from_llm(
-                    llm,
-                    config["db"],
-                    document_content_description,
-                    metadata_field_info,
-                    verbose=True,
-                    search_kwargs={"k": 3}
-                )
-                use_self_query = True
-                print("Using SelfQueryRetriever for complex query")
-            except Exception as e:
-                print(f"Error creating SelfQueryRetriever: {e}")
-                retriever = config["db"].as_retriever(search_kwargs={"k": 5})
-                print("Falling back to similarity search")
-        else:
-            # Simple error code - use similarity search directly with enhanced strategy
-            print(f"Using enhanced search for error code: {query.query}")
+            # First try to create a basic LLM for the SelfQueryRetriever
+            llm_for_retriever = get_llm(model_config)
             
-            # First try: exact metadata filter for error code
-            try:
-                exact_docs = config["db"].similarity_search(
-                    query.query, 
-                    k=3,
-                    filter={"error_code": query.query.strip()}
-                )
-                if exact_docs:
-                    print(f"Found {len(exact_docs)} documents with exact error code match")
-                    retriever = config["db"].as_retriever(
-                        search_type="similarity",
-                        search_kwargs={
-                            "k": 3,
-                            "filter": {"error_code": query.query.strip()}
-                        }
-                    )
-                else:
-                    print("No exact error code match, using similarity search")
-                    retriever = config["db"].as_retriever(search_kwargs={"k": 5})
-            except Exception as e:
-                print(f"Error with filtered search: {e}, falling back to similarity search")
-                retriever = config["db"].as_retriever(search_kwargs={"k": 5})
+            # Define metadata field info for error codes (copied from mainold.py)
+            metadata_field_info = [
+                AttributeInfo(
+                    name="error_code",
+                    description="The numeric error code for a machine fault, like '1066' or '0079'.",
+                    type="string",
+                ),
+                AttributeInfo(
+                    name="machine",
+                    description=f"The machine model the document is for, which is '{query.machine}'",
+                    type="string",
+                ),
+            ]
+            
+            document_content_description = "A description of a machine fault, its cause, and its solution."
+            
+            # Create SelfQueryRetriever with same settings as mainold.py
+            retriever = SelfQueryRetriever.from_llm(
+                llm_for_retriever,
+                config["db"],
+                document_content_description,
+                metadata_field_info,
+                verbose=True,
+                search_kwargs={"k": 1}  # Use k=1 like mainold.py for exact matches
+            )
+            print("Created SelfQueryRetriever")
+        except Exception as e:
+            print(f"Failed to create SelfQueryRetriever: {e}, falling back to basic retriever")
+            # If SelfQueryRetriever fails, use basic retriever as fallback
+            retriever = config["db"].as_retriever(search_kwargs={"k": 2})
         
-        # Test the retriever directly
+        # DEBUG: Test what the retriever actually finds
+        print(f"DEBUG: Testing retriever for query '{query.query}'")
         try:
-            test_docs = retriever.get_relevant_documents(query.query)
-            print(f"Direct retriever test found {len(test_docs)} documents")
-            for i, doc in enumerate(test_docs):
-                print(f"Test doc {i+1}: {doc.page_content[:100]}...")
-                if hasattr(doc, 'metadata'):
-                    print(f"  Metadata: {doc.metadata}")
-            
-            # If SelfQueryRetriever found nothing, try a simple similarity search
-            if len(test_docs) == 0 and use_self_query:
-                print("SelfQueryRetriever found no documents, trying similarity search...")
-                simple_retriever = config["db"].as_retriever(search_kwargs={"k": 5})
-                fallback_docs = simple_retriever.get_relevant_documents(query.query)
-                print(f"Similarity search found {len(fallback_docs)} documents")
-                
-                # If similarity search found documents, use it instead
-                if len(fallback_docs) > 0:
-                    print("Using similarity search retriever instead of SelfQueryRetriever")
-                    retriever = simple_retriever
-                    for i, doc in enumerate(fallback_docs[:3]):
-                        print(f"Fallback doc {i+1}: {doc.page_content[:100]}...")
-                        if hasattr(doc, 'metadata'):
-                            print(f"  Metadata: {doc.metadata}")
+            retrieved_docs = retriever.get_relevant_documents(query.query)
+            print(f"DEBUG: Retrieved {len(retrieved_docs)} documents:")
+            for i, doc in enumerate(retrieved_docs):
+                print(f"  Doc {i}: {doc.page_content[:200]}...")
+                print(f"  Metadata: {doc.metadata}")
         except Exception as e:
-            print(f"Error testing retriever: {e}")
-            # Fallback to similarity search
-            print("Using similarity search as fallback")
-            retriever = config["db"].as_retriever(search_kwargs={"k": 5})
+            print(f"DEBUG: Retriever error: {e}")
         
         # Get the current prompt template
         prompt_template = get_current_prompt_template()
@@ -877,7 +760,7 @@ async def query_documents(query: QueryRequest):
         
         # Stream the response with automatic fallback
         return StreamingResponse(
-            stream_response_with_fallback(retriever, query.query, prompt_template),
+            stream_response_with_fallback(retriever, query.query, prompt_template, model_config),
             media_type="text/plain"
         )
     except Exception as e:
@@ -937,7 +820,38 @@ async def debug_error_codes(machine_name: str):
             "machine": machine_name,
             "total_error_codes": len(error_codes),
             "error_codes": error_codes[:50],  # Limit to first 50 for readability
-            "has_1083": any(ec["error_code"] == "1083" for ec in error_codes)
+            "has_1083": any(ec["error_code"] == "1083" for ec in error_codes),
+            "has_1056": any(ec["error_code"] == "1056" for ec in error_codes)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/debug/search_error/{machine_name}/{error_code}")
+async def search_specific_error_code(machine_name: str, error_code: str):
+    """Debug endpoint to search for a specific error code"""
+    global MACHINE_CONFIG
+    try:
+        config = MACHINE_CONFIG.get(machine_name)
+        if not config or not config.get("db"):
+            raise HTTPException(status_code=404, detail=f"Machine '{machine_name}' not found or not indexed")
+        
+        # Get all documents from the database
+        all_docs = config["db"].get()
+        
+        found_codes = []
+        for i, metadata in enumerate(all_docs.get("metadatas", [])):
+            if metadata and "error_code" in metadata and metadata["error_code"] == error_code:
+                found_codes.append({
+                    "error_code": metadata["error_code"],
+                    "full_content": all_docs["documents"][i] if i < len(all_docs["documents"]) else "No content",
+                    "metadata": metadata
+                })
+        
+        return {
+            "machine": machine_name,
+            "search_code": error_code,
+            "found": len(found_codes) > 0,
+            "results": found_codes
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

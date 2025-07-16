@@ -24,11 +24,17 @@ function App() {
     const [isChangeModelModalOpen, setChangeModelModalOpen] = useState(false);
     const [isManageDocumentsModalOpen, setManageDocumentsModalOpen] = useState(false);
 
-    const [machine, setMachine] = useState(() => localStorage.getItem('machine') || 'Yaskawa Alarm 380500');
+    const [machine, setMachine] = useState(() => localStorage.getItem('machine') || 'No machine selected');
     const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
     const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en');
     const [fontSize, setFontSize] = useState(() => parseInt(localStorage.getItem('fontSize'), 10) || 16);
-    const [promptTemplate, setPromptTemplate] = useState('');
+    const [promptTemplate, setPromptTemplate] = useState(`You will be given context from a machine's technical manual and an error code.
+Structure your response in three distinct sections:
+1. **Problem Description:** Briefly explain what the error code means based on the context.
+2. **Probable Causes:** List the most likely reasons for this error from the context.
+3. **Solution Steps:** Provide a clear, step-by-step guide to fix the issue using only information from the context.
+
+**IMPORTANT:** Only use information from the provided context. If the context is empty or does not contain specific information for the queried error code, state that "No specific information was found for this error code in the manual."`);
     const [modelConfig, setModelConfig] = useState(() => {
         const savedConfig = localStorage.getItem('modelConfig');
         return savedConfig ? JSON.parse(savedConfig) : { type: 'api', provider: 'google' };
@@ -44,7 +50,7 @@ function App() {
             try {
                 const res = await fetch('http://127.0.0.1:8000/prompt_template');
                 const data = await res.json();
-                setPromptTemplate(data.prompt_template);
+                setPromptTemplate(data.template);
             } catch (error) {
                 console.error("Failed to fetch prompt template:", error);
                 // Set a fallback template if the fetch fails
@@ -64,6 +70,14 @@ function App() {
     }, [machine, theme, language, fontSize, promptTemplate, modelConfig]);
 
     const handleSendMessage = async (query) => {
+        if (machine === 'No machine selected') {
+            setMessages([...messages, 
+                { text: query, sender: 'user' },
+                { text: 'Please select a machine from the sidebar first.', sender: 'bot' }
+            ]);
+            return;
+        }
+
         const newMessages = [...messages, { text: query, sender: 'user' }];
         setMessages(newMessages);
         setLoading(true);
@@ -82,8 +96,8 @@ function App() {
                     machine, 
                     query, 
                     language, 
-                    system_prompt: "You are a helpful assistant.",
-                    model_config: modelConfig 
+                    system_prompt: promptTemplate,
+                    model_settings: modelConfig 
                 }),
             });
 
@@ -123,7 +137,7 @@ function App() {
             await fetch('http://127.0.0.1:8000/prompt_template', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt_template: promptTemplate }),
+                body: JSON.stringify({ template: promptTemplate }),
             });
         } catch (error) {
             console.error('Failed to save prompt template:', error);

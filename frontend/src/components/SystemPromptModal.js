@@ -1,6 +1,6 @@
 import React from 'react';
 
-const SystemPromptModal = ({ isOpen, onClose, systemPrompt, setSystemPrompt }) => {
+const SystemPromptModal = ({ isOpen, onClose, systemPrompt, setSystemPrompt, onSave }) => {
     if (!isOpen) return null;
 
     return (
@@ -12,7 +12,7 @@ const SystemPromptModal = ({ isOpen, onClose, systemPrompt, setSystemPrompt }) =
                     onChange={(e) => setSystemPrompt(e.target.value)} 
                     rows="10"
                 />
-                <button onClick={onClose}>Save and Close</button>
+                <button onClick={onSave}>Save and Close</button>
             </div>
         </div>
     );

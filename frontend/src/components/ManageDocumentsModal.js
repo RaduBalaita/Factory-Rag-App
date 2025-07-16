@@ -197,7 +197,7 @@ const ManageDocumentsModal = ({ isOpen, onClose, language, onDocumentChange }) =
                     )}
                 </div>
 
-                <button onClick={onClose} className="close-btn">{t.close}</button>
+                <button onClick={onClose}>{t.close}</button>
             </div>
         </div>
     );
