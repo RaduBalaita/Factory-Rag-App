@@ -6,9 +6,9 @@ An intelligent assistant for troubleshooting machine problems using Retrieval-Au
 
 <br>
 
-![Screenshot_1](https://github.com/user-attachments/assets/72d54d3a-a698-468a-a3e1-d655fe94852d)
+![Screenshot_1](https://github.com/user-attachments/assets/b4631fcf-c62a-4975-acbf-bd4f1010bcfe)
 
-![Screenshot_2](https://github.com/user-attachments/assets/fbfb8daa-334a-48b2-b84b-9d565992a263)
+![Screenshot_2](https://github.com/user-attachments/assets/eb3c4e2b-bfd2-4263-b0d9-d57b2e034e35)
 
 <br>
 
