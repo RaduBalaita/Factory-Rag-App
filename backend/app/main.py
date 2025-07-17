@@ -28,8 +28,11 @@ import psutil
 # Set the API key
 load_dotenv()  # Load environment variables from .env
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Note: API key is now optional since it can be configured via UI
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable not set")
+    print("⚠️  GEMINI_API_KEY not found in environment. You can configure API keys via the UI.")
+else:
+    print("✅ GEMINI_API_KEY loaded from environment.")
     
 app = FastAPI()
 
@@ -104,20 +107,31 @@ async def upload_machine_document(name: str, file: UploadFile = File(...)):
     """Upload a new machine document"""
     global MACHINE_CONFIG
     try:
-        # Validate file type
-        if not file.filename.endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-        
+        # Validate file type and set folder
+        ext_map = {
+            '.pdf': 'PDF',
+            '.md': 'MD',
+            '.markdown': 'MD',
+            '.docx': 'DOCX',
+            '.txt': 'TXT',
+            '.doc': 'DOC',
+            '.rtf': 'RTF',
+            '.odt': 'ODT',
+            '.fodt': 'LIBRE',
+            '.ott': 'LIBRE',
+        }
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in ext_map:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_ext}")
+        folder = ext_map[file_ext]
         # Create safe filename
         safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name.lower())
-        filename = f"{safe_name}.pdf"
-        doc_path = os.path.join(DOCS_PATH, "PDF", filename)
+        filename = f"{safe_name}{file_ext}"
+        doc_path = os.path.join(DOCS_PATH, folder, filename)
         index_path = os.path.join(FAISS_INDEX_PATH, f"{safe_name}.faiss")
-        
         # Create directories if they don't exist
         os.makedirs(os.path.dirname(doc_path), exist_ok=True)
         os.makedirs(FAISS_INDEX_PATH, exist_ok=True)
-        
         # Save uploaded file
         with open(doc_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -704,42 +718,68 @@ async def query_documents(query: QueryRequest):
         
         print("Database loaded successfully")
         
-        # Create SelfQueryRetriever like in mainold.py for better error code retrieval
-        # Use it for BOTH local and API models since it's designed for exact error code matching
-        try:
-            # First try to create a basic LLM for the SelfQueryRetriever
-            llm_for_retriever = get_llm(model_config)
-            
-            # Define metadata field info for error codes (copied from mainold.py)
-            metadata_field_info = [
-                AttributeInfo(
-                    name="error_code",
-                    description="The numeric error code for a machine fault, like '1066' or '0079'.",
-                    type="string",
-                ),
-                AttributeInfo(
-                    name="machine",
-                    description=f"The machine model the document is for, which is '{query.machine}'",
-                    type="string",
-                ),
-            ]
-            
-            document_content_description = "A description of a machine fault, its cause, and its solution."
-            
-            # Create SelfQueryRetriever with same settings as mainold.py
-            retriever = SelfQueryRetriever.from_llm(
-                llm_for_retriever,
-                config["db"],
-                document_content_description,
-                metadata_field_info,
-                verbose=True,
-                search_kwargs={"k": 1}  # Use k=1 like mainold.py for exact matches
-            )
-            print("Created SelfQueryRetriever")
-        except Exception as e:
-            print(f"Failed to create SelfQueryRetriever: {e}, falling back to basic retriever")
-            # If SelfQueryRetriever fails, use basic retriever as fallback
-            retriever = config["db"].as_retriever(search_kwargs={"k": 2})
+        # Create retriever with error code handling
+        # First check if query looks like an error code
+        import re
+        error_code_pattern = r'^\d{3,}$'
+        is_error_code = re.match(error_code_pattern, query.query.strip())
+        
+        if is_error_code:
+            # For error codes, use direct metadata search
+            print(f"Query '{query.query}' detected as error code, using metadata search")
+            try:
+                # Search directly using ChromaDB metadata filtering
+                db = config["db"]
+                results = db.similarity_search(
+                    query.query,
+                    k=1,
+                    filter={"error_code": query.query.strip()}
+                )
+                print(f"Found {len(results)} results with metadata filtering")
+                
+                if results:
+                    # Use the regular retriever but with a custom search function
+                    retriever = config["db"].as_retriever(search_kwargs={"k": 1, "filter": {"error_code": query.query.strip()}})
+                    print("Created metadata-filtered retriever")
+                else:
+                    # No exact match, fallback to similarity search
+                    print("No exact error code match, using similarity search")
+                    retriever = config["db"].as_retriever(search_kwargs={"k": 2})
+                
+            except Exception as e:
+                print(f"Metadata search failed: {e}, falling back to SelfQueryRetriever")
+                # Fallback to SelfQueryRetriever for local models
+                try:
+                    llm_for_retriever = get_llm(model_config)
+                    
+                    # Define metadata field info for error codes
+                    metadata_field_info = [
+                        AttributeInfo(
+                            name="error_code",
+                            description="The numeric error code for a machine fault, like '1066' or '0079'.",
+                            type="string",
+                        ),
+                    ]
+                    
+                    document_content_description = "A description of a machine fault, its cause, and its solution."
+                    
+                    # Create SelfQueryRetriever with same settings as mainold.py
+                    retriever = SelfQueryRetriever.from_llm(
+                        llm_for_retriever,
+                        config["db"],
+                        document_content_description,
+                        metadata_field_info,
+                        verbose=True,
+                        search_kwargs={"k": 1}
+                    )
+                    print("Created SelfQueryRetriever as fallback")
+                except Exception as e2:
+                    print(f"SelfQueryRetriever also failed: {e2}, using basic retriever")
+                    retriever = config["db"].as_retriever(search_kwargs={"k": 2})
+        else:
+            # For non-error code queries, use basic retriever
+            print(f"Query '{query.query}' is not an error code, using basic retriever")
+            retriever = config["db"].as_retriever(search_kwargs={"k": 3})
         
         # DEBUG: Test what the retriever actually finds
         print(f"DEBUG: Testing retriever for query '{query.query}'")

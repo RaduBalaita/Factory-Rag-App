@@ -34,7 +34,7 @@ const translations = {
     },
 };
 
-const initialSettingIds = ['theme', 'language', 'font-size', 'system-prompt', 'change-model', 'manage-documents'];
+const initialSettingIds = ['theme', 'language', 'font-size', 'change-model', 'manage-documents', 'system-prompt'];
 
 const SortableItem = ({ id, children }) => {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id });

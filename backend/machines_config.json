@@ -1,1 +1,6 @@
-{}
+{
+  "Fragor": {
+    "doc": "C:\\Users\\Tempest\\Desktop\\RAG\\backend\\app\\..\\..\\docs\\PDF\\fragor.pdf",
+    "index": "C:\\Users\\Tempest\\Desktop\\RAG\\backend\\app\\..\\faiss_index\\fragor.faiss"
+  }
+}

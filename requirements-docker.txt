@@ -1,3 +1,4 @@
+# requirements-docker.txt - simplified compatible versions
 fastapi
 uvicorn
 python-dotenv
@@ -6,22 +7,15 @@ langchain
 langchain-community
 langchain_huggingface
 sentence-transformers
-faiss-cpu
+torch
 langchain-google-genai
 google-generativeai
 pypdf
 pypdfium2
 pymupdf
-unstructured[local-inference]
-langchain-community[retrievers]
 chromadb
 lark
 llama-cpp-python
 langchain-openai
 langchain-anthropic
 psutil
-python-docx
-odfpy
-pypandoc
-striprtf
-markdown

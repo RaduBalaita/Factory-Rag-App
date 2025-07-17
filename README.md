@@ -140,6 +140,49 @@ For offline operation with local models:
 2. Download GGUF model files and place them in the `.models` directory
 3. Local models will automatically appear in the model selection dropdown
 
+## Docker Deployment
+
+For easy deployment using Docker:
+
+### Build and Run with Docker
+
+1. **Build the Docker image:**
+    ```bash
+    docker build -t rag-app .
+    ```
+
+2. **Run the container (using built-in volume defaults):**
+    ```bash
+    docker run -p 8080:8080 rag-app
+    ```
+
+3. **Or run with custom volume paths:**
+    ```bash
+    docker run -p 8080:8080 \
+      -v ./docs:/app/docs \
+      -v ./backend/faiss_index:/app/backend/faiss_index \
+      -v ./.models:/app/.models \
+      rag-app
+    ```
+
+4. **Access the application:**
+    Open your browser to `http://localhost:8080`
+
+### Data Persistence Options
+- **Default (built-in volumes):** Data persists in Docker-managed volumes
+- **Custom paths:** Mount your own directories for easier access:
+  - `-v ./docs:/app/docs` - Uploaded PDF documents
+  - `-v ./backend/faiss_index:/app/backend/faiss_index` - Vector databases
+  - `-v ./.models:/app/.models` - Local GGUF model files
+
+### Environment Variables (Optional)
+You can pass API keys as environment variables:
+```bash
+docker run -p 8080:8080 \
+  -e GEMINI_API_KEY=your_key_here \
+  rag-app
+```
+
 ## Usage
 
 1. **Upload Documents:** Use "Manage Documents" in the settings to upload machine manuals (PDF format)
