@@ -1,11 +1,34 @@
-# Python/Backend ignores
-.venv/
-.models/
-.env
+# Node
+node_modules/
+build/
+dist/
+*.log
+
+# Python
 __pycache__/
 *.pyc
-backend/faiss_index/
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+*.sqlite3
 
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+*.sock
+
+# Data
+docs/PDF/
+backend/faiss_index/
+.models/
 # Frontend ignores
 frontend/node_modules/
 frontend/build/

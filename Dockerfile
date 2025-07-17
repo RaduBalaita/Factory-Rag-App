@@ -24,9 +24,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy and install Python dependencies with fixed versions
-COPY requirements-docker.txt ./
+# Copy and install Python dependencies
+COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements-docker.txt
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
 COPY backend/ ./backend/
