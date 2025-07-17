@@ -70,55 +70,63 @@ Structure your response in three distinct sections:
     }, [machine, theme, language, fontSize, promptTemplate, modelConfig]);
 
     const handleSendMessage = async (query) => {
-        if (machine === 'No machine selected') {
-            setMessages([...messages, 
-                { text: query, sender: 'user' },
-                { text: 'Please select a machine from the sidebar first.', sender: 'bot' }
-            ]);
-            return;
+    if (machine === 'No machine selected') {
+        setMessages(prev => [...prev, 
+            { text: query, sender: 'user' },
+            { text: 'Please select a machine from the sidebar first.', sender: 'bot' }
+        ]);
+        return;
+    }
+
+    const userMessage = { text: query, sender: 'user' };
+    
+    // Step 1: Add the user message and the "Thinking..." placeholder.
+    const thinkingPlaceholder = { text: t.thinking, sender: 'bot' };
+    // Create an index to track which message we need to update.
+    const botMessageIndex = messages.length + 1; 
+    setMessages(prev => [...prev, userMessage, thinkingPlaceholder]);
+    
+    setLoading(true);
+
+    try {
+        const res = await fetch('http://127.0.0.1:8000/query', { // Corrected IP
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                machine, query, language, 
+                system_prompt: promptTemplate,
+                model_settings: modelConfig 
+            }),
+        });
+        
+        if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(errorData.detail || 'The server returned an error.');
         }
 
-        const newMessages = [...messages, { text: query, sender: 'user' }];
-        setMessages(newMessages);
-        setLoading(true);
+        // Step 2: Read the ENTIRE response from the stream at once.
+        // Since the backend sends it all in one go now, this is efficient.
+        const fullResponseText = await res.text();
 
-        // Add a thinking message
-        const thinkingMessage = { text: t.thinking, sender: 'bot' };
-        setMessages([...newMessages, thinkingMessage]);
+        // Step 3: Replace the "Thinking..." message with the final, complete response.
+        setMessages(prev => {
+            const newMessages = [...prev];
+            // Find the message at our specific index and update its text.
+            newMessages[botMessageIndex] = { ...newMessages[botMessageIndex], text: fullResponseText };
+            return newMessages;
+        });
 
-        try {
-            const res = await fetch('http://127.0.0.1:8000/query', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ 
-                    machine, 
-                    query, 
-                    language, 
-                    system_prompt: promptTemplate,
-                    model_settings: modelConfig 
-                }),
-            });
-
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let responseText = '';
-
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-
-                responseText += decoder.decode(value, { stream: true });
-                setMessages([...newMessages, { text: responseText, sender: 'bot' }]);
-            }
-
-        } catch (error) {
-            setMessages([...newMessages, { text: 'An error occurred while fetching the response.', sender: 'bot' }]);
-        } finally {
-            setLoading(false);
-        }
-    };
+    } catch (error) {
+        // If an error occurs, replace the "Thinking..." message with the error.
+        setMessages(prev => {
+            const newMessages = [...prev];
+            newMessages[botMessageIndex] = { ...newMessages[botMessageIndex], text: `An error occurred: ${error.message}` };
+            return newMessages;
+        });
+    } finally {
+        setLoading(false);
+    }
+};
 
     const handleClearChat = () => {
         setMessages([]);

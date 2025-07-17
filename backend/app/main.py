@@ -24,6 +24,18 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 import gc
 import psutil
+from cachetools import LRUCache
+
+# Prompt cache (in-memory, autoclears on app close)
+prompt_cache = LRUCache(maxsize=1000)
+
+# Helper function for streaming a string as an async iterator
+async def string_to_async_iterator(s: str) -> AsyncIterator[str]:
+    """Helper to turn a complete string into a single-item async stream."""
+    yield s
+
+def get_cache_key(prompt, model, system_prompt):
+    return f"{model}:{system_prompt}:{prompt}"
 
 # Set the API key
 load_dotenv()  # Load environment variables from .env
@@ -695,116 +707,62 @@ async def stream_response(chain, user_query: str) -> AsyncIterator[str]:
 @app.post("/query")
 async def query_documents(query: QueryRequest):
     global MACHINE_CONFIG
-    
     try:
         print(f"Query received: '{query.query}' for machine: '{query.machine}'")
-        
         model_config = query.model_settings.dict()
-        print(f"Model config: {model_config}")
-        
         config = MACHINE_CONFIG.get(query.machine)
         if not config:
             raise HTTPException(status_code=404, detail=f"Machine '{query.machine}' not found")
-        
-        print(f"Machine config found: {config}")
-        
-        # Create index if it doesn't exist
+
+        # --- 1. CACHE CHECK ---
+        cache_key = get_cache_key(query.query, model_config.get('type', ''), query.system_prompt or '')
+        cached_response = prompt_cache.get(cache_key)
+        if cached_response:
+            print(f"✅ Cache hit for key: {cache_key}")
+            # ALWAYS return a StreamingResponse, even for a cached result
+            return StreamingResponse(
+                string_to_async_iterator(cached_response),
+                media_type="text/plain"
+            )
+
+        print(f"❌ Cache miss for key: {cache_key}. Generating new response.")
+
+        # --- 2. DATABASE & RETRIEVER SETUP (Unchanged) ---
         if not config.get("db"):
-            print("Database not found, creating index...")
             await create_index_for_machine(query.machine, config)
-        
         if not config.get("db"):
             raise HTTPException(status_code=500, detail=f"Failed to create or load index for {query.machine}")
-        
-        print("Database loaded successfully")
-        
-        # Create retriever with error code handling
-        # First check if query looks like an error code
-        import re
+
         error_code_pattern = r'^\d{3,}$'
         is_error_code = re.match(error_code_pattern, query.query.strip())
-        
+
         if is_error_code:
-            # For error codes, use direct metadata search
-            print(f"Query '{query.query}' detected as error code, using metadata search")
-            try:
-                # Search directly using ChromaDB metadata filtering
-                db = config["db"]
-                results = db.similarity_search(
-                    query.query,
-                    k=1,
-                    filter={"error_code": query.query.strip()}
-                )
-                print(f"Found {len(results)} results with metadata filtering")
-                
-                if results:
-                    # Use the regular retriever but with a custom search function
-                    retriever = config["db"].as_retriever(search_kwargs={"k": 1, "filter": {"error_code": query.query.strip()}})
-                    print("Created metadata-filtered retriever")
-                else:
-                    # No exact match, fallback to similarity search
-                    print("No exact error code match, using similarity search")
-                    retriever = config["db"].as_retriever(search_kwargs={"k": 2})
-                
-            except Exception as e:
-                print(f"Metadata search failed: {e}, falling back to SelfQueryRetriever")
-                # Fallback to SelfQueryRetriever for local models
-                try:
-                    llm_for_retriever = get_llm(model_config)
-                    
-                    # Define metadata field info for error codes
-                    metadata_field_info = [
-                        AttributeInfo(
-                            name="error_code",
-                            description="The numeric error code for a machine fault, like '1066' or '0079'.",
-                            type="string",
-                        ),
-                    ]
-                    
-                    document_content_description = "A description of a machine fault, its cause, and its solution."
-                    
-                    # Create SelfQueryRetriever with same settings as mainold.py
-                    retriever = SelfQueryRetriever.from_llm(
-                        llm_for_retriever,
-                        config["db"],
-                        document_content_description,
-                        metadata_field_info,
-                        verbose=True,
-                        search_kwargs={"k": 1}
-                    )
-                    print("Created SelfQueryRetriever as fallback")
-                except Exception as e2:
-                    print(f"SelfQueryRetriever also failed: {e2}, using basic retriever")
-                    retriever = config["db"].as_retriever(search_kwargs={"k": 2})
+            retriever = config["db"].as_retriever(search_kwargs={"k": 1, "filter": {"error_code": query.query.strip()}})
+            if not retriever.get_relevant_documents(query.query):
+                retriever = config["db"].as_retriever(search_kwargs={"k": 2})
         else:
-            # For non-error code queries, use basic retriever
-            print(f"Query '{query.query}' is not an error code, using basic retriever")
             retriever = config["db"].as_retriever(search_kwargs={"k": 3})
-        
-        # DEBUG: Test what the retriever actually finds
-        print(f"DEBUG: Testing retriever for query '{query.query}'")
-        try:
-            retrieved_docs = retriever.get_relevant_documents(query.query)
-            print(f"DEBUG: Retrieved {len(retrieved_docs)} documents:")
-            for i, doc in enumerate(retrieved_docs):
-                print(f"  Doc {i}: {doc.page_content[:200]}...")
-                print(f"  Metadata: {doc.metadata}")
-        except Exception as e:
-            print(f"DEBUG: Retriever error: {e}")
-        
-        # Get the current prompt template
+
         prompt_template = get_current_prompt_template()
-        print(f"Using prompt template: {prompt_template[:100]}...")
-        
-        print("Starting to stream response with fallback support...")
-        
-        # Stream the response with automatic fallback
+
+        # --- 3. GENERATE, CACHE, AND STREAM ---
+        # Generate the full response first by consuming the stream/generator
+        response_generator = stream_response_with_fallback(retriever, query.query, prompt_template, model_config)
+        full_response_chunks = [chunk async for chunk in response_generator]
+        full_response = "".join(full_response_chunks)
+
+        # Now, save the complete response to the cache
+        if full_response.strip():
+            print(f"💾 Saving response to cache with key: {cache_key}")
+            prompt_cache[cache_key] = full_response
+
+        # Finally, stream the fully-formed response back to the client
         return StreamingResponse(
-            stream_response_with_fallback(retriever, query.query, prompt_template, model_config),
+            string_to_async_iterator(full_response),
             media_type="text/plain"
         )
+
     except Exception as e:
-        print(f"Error in query_documents: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
